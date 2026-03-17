@@ -3,7 +3,7 @@
 
 import { motion } from "framer-motion";
 import { cn, sentimentColor } from "@/lib/utils";
-import type { NewsAgentOutput, Sentiment } from "@/types";
+import type { Sentiment } from "@/types";
 
 // Extended type for the component (maps from full thesis data)
 interface SentimentHeatmapProps {
