@@ -11,9 +11,6 @@ from typing import Any
 try:
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 except ImportError:
-    try:
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-except ImportError:
     from langchain.text_splitter import RecursiveCharacterTextSplitter
 from chromadb.utils.embedding_functions import FastEmbedEmbeddingFunction
 import chromadb
