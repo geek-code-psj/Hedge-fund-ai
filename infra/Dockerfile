@@ -1,57 +1,63 @@
-# infra/Dockerfile
-# Ultra-slim runtime image (~600-800 MB) for Railway
+# infra/Dockerfile  v5
+# Target: < 600 MB image, builds in < 4 minutes on Railway free tier
+#
+# Key decisions:
+#   - fastembed (ONNX, 50MB) replaces sentence-transformers (PyTorch, 800MB)
+#   - arize-phoenix and deepeval are DEV ONLY — not installed here
+#   - No model pre-download — downloads on first request, cached in Railway volume
+#   - Single-stage build (no multi-stage needed — cuts copy time)
 
-# ── Stage 1: dependency builder ───────────────────────────────────────────────
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim
 
-WORKDIR /build
+WORKDIR /app
 
-# Build tools (cmake/g++ needed for chromadb compiled sqlite)
+# System deps — minimal
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ cmake build-essential libpq-dev curl \
+    gcc g++ libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
-
-# Use official 'uv' binary for 10-100x faster installation
+# Fast installer
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Compile requirements directly into the system python
-RUN uv pip install --system --no-cache .
+# Copy only the dependency manifest first (layer cache — only re-installs when pyproject.toml changes)
+COPY pyproject.toml .
 
-# ── Stage 2: runtime ──────────────────────────────────────────────────────────
-FROM python:3.11-slim AS runtime
+# Install ONLY runtime deps (not dev extras which include deepeval + phoenix + torch)
+RUN uv pip install --system --no-cache \
+    fastapi "uvicorn[standard]" httpx python-multipart python-dotenv \
+    "pydantic>=2.7.0" pydantic-settings \
+    "langgraph>=0.2.0" "langchain>=0.2.0" langchain-openai langchain-community \
+    "openai>=1.35.0" "instructor>=1.3.0" tenacity \
+    "langchain-chroma>=0.1.0" "chromadb>=0.5.0" "fastembed>=0.3.0" tiktoken \
+    "pandas>=2.2.0" "numpy>=1.26.0" ta \
+    "redisvl>=0.3.0" redis \
+    asyncpg "sqlalchemy[asyncio]" aiosqlite \
+    opentelemetry-sdk opentelemetry-exporter-otlp-proto-http \
+    openinference-instrumentation-openai \
+    slowapi PyJWT structlog
 
-# Security: non-root user
-RUN useradd --create-home --shell /bin/bash appuser
-WORKDIR /home/appuser/app
-
-# Runtime system deps only
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy strictly installed packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
-
-# Copy ONLY backend application source
+# Copy application source
 COPY app/ ./app/
 
-# Set ownership
-RUN chown -R appuser:appuser /home/appuser
+# Create non-root user
+RUN useradd --create-home appuser \
+    && chown -R appuser:appuser /app
+
+# Cache dirs for fastembed/ONNX models (downloaded on first request)
+ENV HF_HOME=/home/appuser/.cache/huggingface
+ENV FASTEMBED_CACHE_DIR=/home/appuser/.cache/fastembed
+ENV ONNX_DISABLE_STATIC_ANALYSIS=1
 
 USER appuser
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=15s --start-period=90s --retries=5 \
     CMD curl -sf http://localhost:8000/health || exit 1
 
-# 2 workers for free-tier single-vCPU hosts
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
-     "--workers", "2", \
+     "--workers", "1", \
      "--loop", "uvloop", \
      "--log-level", "info"]
