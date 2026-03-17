@@ -11,7 +11,7 @@ import type {
   SSEProgressEvent,
 } from "@/types";
 
-const BACKEND = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const BACKEND = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 const INITIAL_AGENTS: Record<string, AgentStatus> = {
   news_agent: { name: "news_agent", label: "News & Sentiment", status: "pending", summary: "", pct: 0 },
