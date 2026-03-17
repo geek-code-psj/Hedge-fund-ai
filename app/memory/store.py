@@ -61,11 +61,13 @@ async def store_analysis_memory(ticker: str, query: str, thesis: InvestmentThesi
     try:
         col = _get_collection(_MEMORY_COLLECTION)
         doc_id = f"{ticker}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        conviction = thesis.conviction_score if thesis.conviction_score is not None else 0.0
+        target_price = thesis.valuation.target_price_usd if thesis.valuation.target_price_usd is not None else 0.0
         document = (
             f"Ticker: {ticker}\nQuery: {query}\n"
             f"Recommendation: {thesis.recommendation.value}\n"
-            f"Conviction: {thesis.conviction_score:.2f}\n"
-            f"Target: ${thesis.valuation.target_price_usd:.2f}\n"
+            f"Conviction: {conviction:.2f}\n"
+            f"Target: ${target_price:.2f}\n"
             f"Summary: {thesis.executive_summary[:300]}"
         )
         col.upsert(
@@ -74,7 +76,7 @@ async def store_analysis_memory(ticker: str, query: str, thesis: InvestmentThesi
             metadatas=[{
                 "ticker": ticker,
                 "recommendation": thesis.recommendation.value,
-                "conviction": str(thesis.conviction_score),
+                "conviction": str(conviction),
                 "date": thesis.analysis_date,
             }],
         )

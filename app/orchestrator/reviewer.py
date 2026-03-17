@@ -184,8 +184,9 @@ def _serialise(r: AggregatedResearch) -> str:
 
     if r.news:
         headlines = "\n".join(f"  • {h.headline}" for h in r.news.top_headlines[:5])
+        news_score = r.news.sentiment_score if r.news.sentiment_score is not None else 0.0
         parts.append(
-            f"=== NEWS ({r.news.sentiment.value}, score={r.news.sentiment_score:.3f}) ===\n"
+            f"=== NEWS ({r.news.sentiment.value}, score={news_score:.3f}) ===\n"
             f"{headlines}\nThemes: {', '.join(r.news.key_themes)}"
         )
 
@@ -193,22 +194,28 @@ def _serialise(r: AggregatedResearch) -> str:
         fd = r.financial_data
         tech = ""
         if fd.technicals:
-            tech = (
-                f"\nTechnical signal: {fd.technicals.overall_technical_signal.value}"
-                + (f" | RSI={fd.technicals.rsi.value:.1f}" if fd.technicals.rsi else "")
-                + (f" | MACD histogram={fd.technicals.macd.histogram:.4f}" if fd.technicals.macd else "")
-            )
+            tech = f"\nTechnical signal: {fd.technicals.overall_technical_signal.value if fd.technicals.overall_technical_signal else 'N/A'}"
+            if fd.technicals.rsi and fd.technicals.rsi.value is not None:
+                tech += f" | RSI={fd.technicals.rsi.value:.1f}"
+            if fd.technicals.macd and fd.technicals.macd.histogram is not None:
+                tech += f" | MACD histogram={fd.technicals.macd.histogram:.4f}"
+        
         insider_summary = ""
         if fd.insider_trades:
             buys = sum(1 for t in fd.insider_trades if t.transaction_type == "BUY")
             sells = sum(1 for t in fd.insider_trades if t.transaction_type == "SELL")
             insider_summary = f"\nInsider activity (last 20): {buys} buys, {sells} sells"
 
+        current_price = fd.current_price if fd.current_price is not None else 0.0
+        high_52w = fd.high_52w if fd.high_52w is not None else 0.0
+        low_52w = fd.low_52w if fd.low_52w is not None else 0.0
+        market_cap = fd.market_cap_usd_b if fd.market_cap_usd_b is not None else 0.0
+        
         metrics_json = fd.fundamentals.model_dump_json() if fd.fundamentals else "{}"
         parts.append(
             f"=== FINANCIAL DATA ===\n"
-            f"Price: ${fd.current_price} | 52w: ${fd.high_52w}/{fd.low_52w}\n"
-            f"Market cap: ${fd.market_cap_usd_b}B | Sector: {fd.sector}\n"
+            f"Price: ${current_price} | 52w: ${high_52w}/{low_52w}\n"
+            f"Market cap: ${market_cap}B | Sector: {fd.sector or 'N/A'}\n"
             f"Metrics: {metrics_json[:600]}"
             f"{tech}{insider_summary}"
         )
@@ -217,8 +224,8 @@ def _serialise(r: AggregatedResearch) -> str:
         doc = r.documents
         parts.append(
             f"=== DOCUMENT / RAG ===\n"
-            f"Mgmt tone: {doc.management_tone}\n"
-            f"Key risks: {', '.join(doc.key_risks_from_filings)}\n"
+            f"Mgmt tone: {doc.management_tone or 'N/A'}\n"
+            f"Key risks: {', '.join(doc.key_risks_from_filings) if doc.key_risks_from_filings else 'None identified'}\n"
             + (f"RAG passages:\n{doc.rag_context[:1500]}" if doc.rag_context else "")
         )
 
