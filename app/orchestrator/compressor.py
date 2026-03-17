@@ -27,8 +27,11 @@ def compress_news_output(news: NewsAgentOutput) -> str:
     
     themes = ", ".join(news.key_themes[:5]) if news.key_themes else "none"
     
+    # Safe format: handle None sentiment_score
+    score = news.sentiment_score if news.sentiment_score is not None else 0.0
+    
     return f"""\
-NEWS SENTIMENT: {news.sentiment.value} (score: {news.sentiment_score:.2f})
+NEWS SENTIMENT: {news.sentiment.value} (score: {score:.2f})
 Headlines ({news.headline_count} total):
 {headlines if headlines else "  None"}
 Key Themes: {themes}
@@ -39,6 +42,12 @@ def compress_financial_output(fin: FinancialDataAgentOutput) -> str:
     """Compress financials to essentials: price, technicals, key fundamentals."""
     if not fin or fin.error:
         return "[NO FINANCIAL DATA]"
+    
+    # Safe formatting: handle None values
+    price = fin.current_price if fin.current_price is not None else 0.0
+    low_52w = fin.low_52w if fin.low_52w is not None else 0.0
+    high_52w = fin.high_52w if fin.high_52w is not None else 0.0
+    market_cap = fin.market_cap_usd_b if fin.market_cap_usd_b is not None else 0.0
     
     tech = fin.technicals
     tech_signals = []
@@ -56,18 +65,18 @@ def compress_financial_output(fin: FinancialDataAgentOutput) -> str:
     fund = fin.fundamentals
     fund_metrics = []
     if fund:
-        if fund.pe_ratio:
+        if fund.pe_ratio is not None:
             fund_metrics.append(f"P/E: {fund.pe_ratio:.1f}x")
-        if fund.debt_to_equity:
+        if fund.debt_to_equity is not None:
             fund_metrics.append(f"Debt/Equity: {fund.debt_to_equity:.2f}")
-        if fund.net_margin:
+        if fund.net_margin is not None:
             fund_metrics.append(f"Net Margin: {fund.net_margin:.1%}")
     
     insiders = f"{len(fin.insider_trades)} insider trades" if fin.insider_trades else "No insider trades"
     
     return f"""\
-PRICE: ${fin.current_price:.2f} (52w: ${fin.low_52w:.2f} - ${fin.high_52w:.2f})
-Market Cap: ${fin.market_cap_usd_b:.1f}B | Sector: {fin.sector or 'N/A'}
+PRICE: ${price:.2f} (52w: ${low_52w:.2f} - ${high_52w:.2f})
+Market Cap: ${market_cap:.1f}B | Sector: {fin.sector or 'N/A'}
 Technical Signals: {', '.join(tech_signals) if tech_signals else 'N/A'}
 Fundamentals: {', '.join(fund_metrics) if fund_metrics else 'N/A'}
 Insider Activity: {insiders}

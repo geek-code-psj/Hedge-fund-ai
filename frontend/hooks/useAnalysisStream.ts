@@ -12,6 +12,7 @@ import type {
 } from "@/types";
 
 const BACKEND = process.env.NEXT_PUBLIC_API_URL ?? "";
+const REQUEST_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes timeout
 
 const INITIAL_AGENTS: Record<string, AgentStatus> = {
   news_agent: { name: "news_agent", label: "News & Sentiment", status: "pending", summary: "", pct: 0 },
@@ -36,10 +37,16 @@ const DEFAULT_STATE: AnalysisState = {
 export function useAnalysisStream() {
   const [state, setState] = useState<AnalysisState>(DEFAULT_STATE);
   const esRef = useRef<EventSource | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const analyse = useCallback((ticker: string, query: string) => {
     // Close any previous stream
-    esRef.current?.close();
+    if (esRef.current) {
+      esRef.current.close();
+    }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
 
     setState({
       ...DEFAULT_STATE,
@@ -51,6 +58,16 @@ export function useAnalysisStream() {
     const url = `${BACKEND}/api/v1/analyse?${params}`;
     const es = new EventSource(url);
     esRef.current = es;
+
+    // ── Request timeout: 3 minutes ────────────────────────────────────────────
+    timeoutRef.current = setTimeout(() => {
+      es.close();
+      setState((prev) => ({
+        ...prev,
+        status: "error",
+        error: "Request timeout after 3 minutes. Backend may be slow or unavailable.",
+      }));
+    }, REQUEST_TIMEOUT_MS);
 
     // ── progress ────────────────────────────────────────────────────────────
     es.addEventListener("progress", (e: MessageEvent) => {
@@ -107,6 +124,7 @@ export function useAnalysisStream() {
 
     // ── final ─────────────────────────────────────────────────────────────────
     es.addEventListener("final", (e: MessageEvent) => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
       const data: SSEFinalEvent = JSON.parse(e.data);
       setState((prev) => ({
         ...prev,
@@ -127,6 +145,7 @@ export function useAnalysisStream() {
 
     // ── error ─────────────────────────────────────────────────────────────────
     es.addEventListener("error", (e: MessageEvent) => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
       if (e.data) {
         const data: SSEErrorEvent = JSON.parse(e.data);
         setState((prev) => ({
@@ -140,6 +159,7 @@ export function useAnalysisStream() {
     });
 
     es.onerror = () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
       setState((prev) =>
         prev.status === "running"
           ? { ...prev, status: "error", error: "Connection lost. Please retry." }

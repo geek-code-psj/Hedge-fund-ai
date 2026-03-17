@@ -1,10 +1,13 @@
 """
 app/rag/pipeline.py
 RAG pipeline — ChromaDB with DefaultEmbeddingFunction (built-in ONNX, no external deps).
+
+ONNX models cached: ~/.cache/huggingface/hub/ (no 79MB re-download per request)
 """
 from __future__ import annotations
 
 import hashlib
+import os
 from typing import Any
 
 try:
@@ -20,6 +23,9 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 settings = get_settings()
+
+# Cache ONNX models to avoid 79MB download every request
+os.environ.setdefault("HF_HOME", "/tmp/huggingface")
 
 _CHUNK_SIZE    = 512
 _CHUNK_OVERLAP = 64

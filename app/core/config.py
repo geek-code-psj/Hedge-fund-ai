@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 30
 
     # App
-    app_env: str = "development"
+    app_env: str = "production"  # Changed from "development" for production safety
     log_level: str = "INFO"
 
     @field_validator("cache_similarity_threshold")

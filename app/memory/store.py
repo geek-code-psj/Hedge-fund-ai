@@ -2,11 +2,15 @@
 app/memory/store.py
 Vector memory using ChromaDB + fastembed (no PyTorch — ~50MB vs ~800MB).
 fastembed uses ONNX Runtime under the hood — fast, CPU-only, production-safe.
+
+ONNX models are cached in ~/.cache/huggingface/hub/ on first download.
+Subsequent requests use cached model (no 79MB re-download).
 """
 from __future__ import annotations
 
 import json
 from datetime import datetime
+import os
 
 import chromadb
 from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
@@ -17,6 +21,9 @@ from app.schemas.models import InvestmentThesis
 
 logger = get_logger(__name__)
 settings = get_settings()
+
+# Cache ONNX models in shared location
+os.environ.setdefault("HF_HOME", "/tmp/huggingface")  # Railway: use /tmp (persistent across boots)
 
 _MEMORY_COLLECTION    = "analysis_memory"
 _FEEDBACK_COLLECTION  = "feedback_bank"

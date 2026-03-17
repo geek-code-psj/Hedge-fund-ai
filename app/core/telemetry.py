@@ -43,11 +43,19 @@ def configure_tracing() -> None:
         except Exception:
             _NoOp = None
 
+        # Try Phoenix OTLP, but fail gracefully (don't block startup)
+        exporter = None
         try:
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-            exporter = OTLPSpanExporter(endpoint=settings.phoenix_collector_endpoint)
-        except Exception:
-            exporter = _NoOp() if _NoOp else None
+            # Fast timeout: fail immediately if Phoenix not available
+            exporter = OTLPSpanExporter(
+                endpoint=settings.phoenix_collector_endpoint,
+                timeout=2,  # 2s timeout instead of default 10s
+            )
+            _get_logger().info("phoenix_exporter_ready", endpoint=settings.phoenix_collector_endpoint)
+        except Exception as e:
+            _get_logger().warning("phoenix_unavailable", error=str(e), timeout=2)
+            exporter = None
 
         _provider = TracerProvider()
         if exporter:
