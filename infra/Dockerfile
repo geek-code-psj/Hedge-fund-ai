@@ -28,7 +28,7 @@ RUN uv pip install --system --no-cache \
     "pydantic>=2.7.0" pydantic-settings \
     "langgraph>=0.2.0" "langchain>=0.2.0" langchain-openai langchain-community \
     "openai>=1.35.0" "instructor>=1.3.0" tenacity \
-    "langchain-chroma>=0.1.0" "chromadb>=0.5.0" "fastembed>=0.3.0" langchain-text-splitters tiktoken \
+    "langchain-chroma>=0.1.0" "chromadb>=0.5.0" langchain-text-splitters tiktoken \
     "pandas>=2.2.0" "numpy>=1.26.0" ta \
     "redisvl>=0.3.0" redis \
     asyncpg "sqlalchemy[asyncio]" aiosqlite \

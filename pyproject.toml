@@ -32,11 +32,9 @@ dependencies = [
     "tenacity>=8.3.0",
 
     # ── RAG / vector store ────────────────────────────────────────────────────
-    # chromadb + fastembed use ONNX runtime (50MB) instead of PyTorch (800MB)
     # This is the key swap that makes the image fit Railway free tier
     "langchain-chroma>=0.1.0",
     "chromadb>=0.5.0",
-    "fastembed>=0.3.0",      # replaces sentence-transformers — ONNX, no torch
     "langchain-text-splitters>=0.2.0",
     "tiktoken>=0.7.0",
 

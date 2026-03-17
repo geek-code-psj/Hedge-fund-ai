@@ -1,7 +1,6 @@
 """
 app/rag/pipeline.py
-RAG pipeline using ChromaDB + fastembed.
-fastembed: ONNX Runtime backend, no PyTorch, ~50MB total.
+RAG pipeline — ChromaDB with DefaultEmbeddingFunction (built-in ONNX, no external deps).
 """
 from __future__ import annotations
 
@@ -11,9 +10,10 @@ from typing import Any
 try:
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 except ImportError:
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
-from chromadb.utils.embedding_functions import FastEmbedEmbeddingFunction
+    from langchain.text_splitter import RecursiveCharacterTextSplitter  # type: ignore
+
 import chromadb
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -25,7 +25,7 @@ _CHUNK_SIZE    = 512
 _CHUNK_OVERLAP = 64
 _TOP_K         = 4
 
-_embed_fn = None
+_embed_fn       = None
 _vector_stores: dict[str, chromadb.Collection] = {}
 _chroma_client: chromadb.Client | None = None
 
@@ -33,7 +33,8 @@ _chroma_client: chromadb.Client | None = None
 def _get_embed_fn():
     global _embed_fn
     if _embed_fn is None:
-        _embed_fn = FastEmbedEmbeddingFunction(model_name="BAAI/bge-small-en-v1.5")
+        # DefaultEmbeddingFunction ships with chromadb itself — no extra install
+        _embed_fn = DefaultEmbeddingFunction()
     return _embed_fn
 
 
@@ -65,11 +66,11 @@ def ingest_filing(ticker: str, text: str, metadata: dict[str, Any] | None = None
     if not chunks:
         return 0
     store = _get_store(ticker)
-    meta = metadata or {}
+    meta  = metadata or {}
     ids   = [hashlib.md5(c.encode()).hexdigest() for c in chunks]
     metas = [{**meta, "chunk_idx": i, "ticker": ticker} for i, _ in enumerate(chunks)]
     try:
-        store.add(texts=chunks, metadatas=metas, ids=ids)
+        store.add(documents=chunks, metadatas=metas, ids=ids)
         logger.info("rag_ingest", ticker=ticker, chunks=len(chunks))
         return len(chunks)
     except Exception as exc:
@@ -82,9 +83,9 @@ def retrieve(ticker: str, query: str, top_k: int = _TOP_K) -> str:
         store = _get_store(ticker)
         if store.count() == 0:
             return ""
-        docs = store.query(query_texts=[query], n_results=min(top_k, store.count()))
-        documents = docs.get("documents", [[]])[0]
-        metadatas = docs.get("metadatas", [[]])[0]
+        results = store.query(query_texts=[query], n_results=min(top_k, store.count()))
+        documents = results.get("documents", [[]])[0]
+        metadatas = results.get("metadatas", [[]])[0]
         if not documents:
             return ""
         passages = []
