@@ -11,6 +11,7 @@ Complete Pydantic contracts:
 """
 from __future__ import annotations
 
+import operator
 import re
 from datetime import datetime
 from enum import Enum
@@ -68,8 +69,10 @@ class AgentState(TypedDict, total=False):
     aggregated_research: dict | None
     memory_context: str | None
     thesis: dict | None
-    agents_completed: list[str]
-    agents_failed: list[str]
+    # Use Annotated with operator.add for concurrent list updates (fan-out nodes)
+    # This allows parallel nodes to update without "Can receive only one value per step" error
+    agents_completed: Annotated[list[str], operator.add]
+    agents_failed: Annotated[list[str], operator.add]
     human_feedback_required: bool
     human_correction: dict | None
     error: str | None

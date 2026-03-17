@@ -75,8 +75,8 @@ async def orchestrator_node(state: AgentState) -> dict:
     return {
         "ticker": ticker,
         "memory_context": memory_ctx,
-        "agents_completed": [],
-        "agents_failed": [],
+        "agents_completed": [],  # Initialize; operator.add will merge parallel updates
+        "agents_failed": [],      # Initialize; operator.add will merge parallel updates
         "reviewer_retries": 0,
     }
 
@@ -95,18 +95,21 @@ async def news_node(state: AgentState) -> dict:
                 news_agent.run(ticker, _get_http()),
                 timeout=settings.agent_timeout,
             )
-            completed = state.get("agents_completed", []) + ["news_agent"]
-            failed = state.get("agents_failed", [])
-            if result.error:
-                failed = failed + ["news_agent"]
-                completed = [c for c in completed if c != "news_agent"]
-
             logger.info("news_node_done", ticker=ticker, error=result.error)
-            return {
-                "news_output": result.model_dump(),
-                "agents_completed": completed,
-                "agents_failed": failed,
-            }
+            
+            if result.error:
+                # Failed: add only this agent to agents_failed list
+                # operator.add in AgentState will merge with other parallel nodes
+                return {
+                    "news_output": result.model_dump(),
+                    "agents_failed": ["news_agent"],
+                }
+            else:
+                # Success: add only this agent to agents_completed list
+                return {
+                    "news_output": result.model_dump(),
+                    "agents_completed": ["news_agent"],
+                }
         except Exception as exc:
             logger.error("news_node_exception", error=str(exc))
             return {
@@ -114,7 +117,7 @@ async def news_node(state: AgentState) -> dict:
                     ticker=ticker, error=str(exc),
                     sentiment=Sentiment.NEUTRAL, sentiment_score=0.0
                 ).model_dump(),
-                "agents_failed": state.get("agents_failed", []) + ["news_agent"],
+                "agents_failed": ["news_agent"],  # operator.add will merge lists
             }
 
 
@@ -132,24 +135,25 @@ async def financial_node(state: AgentState) -> dict:
                 financial_data_agent.run(ticker, _get_http()),
                 timeout=settings.agent_timeout,
             )
-            completed = state.get("agents_completed", []) + ["financial_data_agent"]
-            failed = state.get("agents_failed", [])
             if result.error:
-                failed = failed + ["financial_data_agent"]
-                completed = [c for c in completed if c != "financial_data_agent"]
-
-            return {
-                "financial_output": result.model_dump(),
-                "agents_completed": completed,
-                "agents_failed": failed,
-            }
+                # Failed: add only this agent to agents_failed
+                return {
+                    "financial_output": result.model_dump(),
+                    "agents_failed": ["financial_data_agent"],
+                }
+            else:
+                # Success: add only this agent to agents_completed
+                return {
+                    "financial_output": result.model_dump(),
+                    "agents_completed": ["financial_data_agent"],
+                }
         except Exception as exc:
             logger.error("financial_node_exception", error=str(exc))
             return {
                 "financial_output": FinancialDataAgentOutput(
                     ticker=ticker, error=str(exc)
                 ).model_dump(),
-                "agents_failed": state.get("agents_failed", []) + ["financial_data_agent"],
+                "agents_failed": ["financial_data_agent"],  # operator.add will merge
             }
 
 
@@ -167,24 +171,25 @@ async def document_node(state: AgentState) -> dict:
                 document_agent.run(ticker, _get_http()),
                 timeout=settings.agent_timeout,
             )
-            completed = state.get("agents_completed", []) + ["document_agent"]
-            failed = state.get("agents_failed", [])
             if result.error:
-                failed = failed + ["document_agent"]
-                completed = [c for c in completed if c != "document_agent"]
-
-            return {
-                "document_output": result.model_dump(),
-                "agents_completed": completed,
-                "agents_failed": failed,
-            }
+                # Failed: add only this agent to agents_failed
+                return {
+                    "document_output": result.model_dump(),
+                    "agents_failed": ["document_agent"],
+                }
+            else:
+                # Success: add only this agent to agents_completed
+                return {
+                    "document_output": result.model_dump(),
+                    "agents_completed": ["document_agent"],
+                }
         except Exception as exc:
             logger.error("document_node_exception", error=str(exc))
             return {
                 "document_output": DocumentAgentOutput(
                     ticker=ticker, error=str(exc)
                 ).model_dump(),
-                "agents_failed": state.get("agents_failed", []) + ["document_agent"],
+                "agents_failed": ["document_agent"],  # operator.add will merge
             }
 
 
