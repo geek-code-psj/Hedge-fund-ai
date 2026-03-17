@@ -1,0 +1,41 @@
+# infra/fly.toml
+# Alternative free deployment on Fly.io (3 shared-cpu-1x VMs free).
+# fly launch --config infra/fly.toml
+
+app = "hedge-fund-ai"
+primary_region = "sin"      # Singapore — closest to India
+kill_signal = "SIGINT"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "infra/Dockerfile"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0    # scale to zero when idle (free tier)
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[env]
+  APP_ENV = "production"
+  LOG_LEVEL = "INFO"
+  CACHE_TTL_SECONDS = "900"
+  SEC_USER_AGENT = "HedgeFundAI research@example.com"
+
+# Secrets set via: fly secrets set KEY=VALUE
+# Required secrets: OPENAI_API_KEY, EODHD_API_KEY, FMP_API_KEY,
+#                   FINNHUB_API_KEY, REDIS_URL, DATABASE_URL
+
+[[services.ports]]
+  handlers = ["http"]
+  port = 80
+
+[[services.ports]]
+  handlers = ["tls", "http"]
+  port = 443

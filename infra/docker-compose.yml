@@ -1,0 +1,78 @@
+# infra/docker-compose.yml
+# Complete free local development stack.
+#
+#  phoenix  → http://localhost:6006   (LLM observability UI)
+#  redis    → localhost:6379          (semantic cache)
+#  redis-ui → http://localhost:8001   (RedisInsight)
+#  app      → http://localhost:8000   (FastAPI + docs at /docs)
+#
+# Start:
+#   docker compose -f infra/docker-compose.yml up --build
+# Stop:
+#   docker compose -f infra/docker-compose.yml down
+
+version: "3.9"
+
+services:
+  # ── Arize Phoenix — local LLM observability (MNPI-safe, no egress) ─────────
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: hf_phoenix
+    restart: unless-stopped
+    ports:
+      - "6006:6006"     # Phoenix UI + OTLP HTTP receiver
+    environment:
+      PHOENIX_WORKING_DIR: /phoenix-data
+    volumes:
+      - phoenix_data:/phoenix-data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:6006/healthz"]
+      interval: 20s
+      timeout: 8s
+      retries: 6
+      start_period: 15s
+
+  # ── Redis Stack — includes RedisSearch module required by RedisVL ──────────
+  redis:
+    image: redis/redis-stack:latest
+    container_name: hf_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"     # Redis
+      - "8001:8001"     # RedisInsight GUI
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── FastAPI application ────────────────────────────────────────────────────
+  app:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    container_name: hf_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    environment:
+      REDIS_URL: redis://redis:6379
+      PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
+      # Local SQLite DB inside container — swap to Neon URL in production
+      DATABASE_URL: sqlite+aiosqlite:///./hedge_fund.db
+    depends_on:
+      redis:
+        condition: service_healthy
+      phoenix:
+        condition: service_healthy
+    volumes:
+      - app_data:/home/appuser/app
+
+volumes:
+  phoenix_data:
+  redis_data:
+  app_data:

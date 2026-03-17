@@ -1,0 +1,49 @@
+# infra/render.yaml
+# Deploy FastAPI backend to Render.com free tier.
+# Docs: https://render.com/docs/render-yaml-reference
+
+services:
+  - type: web
+    name: hedge-fund-ai-api
+    runtime: python
+    region: singapore           # closest to India; use oregon/frankfurt as needed
+    plan: free                  # 750 hrs/month free
+    rootDir: .
+    buildCommand: pip install -e .
+    startCommand: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port $PORT
+      --workers 1
+      --loop uvloop
+      --log-level info
+    healthCheckPath: /health
+    autoDeploy: true
+
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false             # set via Render dashboard — never in code
+      - key: EODHD_API_KEY
+        sync: false
+      - key: FMP_API_KEY
+        sync: false
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: SEC_USER_AGENT
+        value: "HedgeFundAI research@example.com"
+      # Upstash Redis — free 256 MB
+      - key: REDIS_URL
+        sync: false
+      # Neon PostgreSQL — free 0.5 GB
+      - key: DATABASE_URL
+        sync: false
+      - key: PHOENIX_COLLECTOR_ENDPOINT
+        value: "http://localhost:6006/v1/traces"   # Phoenix not on Render; tracing degrades gracefully
+      - key: CACHE_TTL_SECONDS
+        value: "900"
+      - key: CACHE_SIMILARITY_THRESHOLD
+        value: "0.92"
+      - key: APP_ENV
+        value: "production"
+      - key: LOG_LEVEL
+        value: "INFO"

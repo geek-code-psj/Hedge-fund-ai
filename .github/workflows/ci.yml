@@ -1,0 +1,332 @@
+# .github/workflows/ci.yml  v3 FINAL
+# ─────────────────────────────────────────────────────────────────────────────
+# Full quality gate for Hedge Fund AI v3 (LangGraph + RAG + Next.js 15)
+#
+# Jobs:
+#   1. lint-python       — ruff + format check
+#   2. lint-frontend     — tsc --noEmit + eslint
+#   3. unit-tests        — Pydantic schemas + technical indicator maths (no LLM)
+#   4. integration-tests — full pipeline with mocked external calls
+#   5. deepeval          — Answer Relevancy, Faithfulness, Contextual Precision
+#                          parallel -n 4, cached -c, inline scores -i
+#   6. frontend-build    — next build (catches import errors, type regressions)
+#   7. merge-gate        — all required jobs must pass before merge
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: CI Quality Gate
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_deepeval:
+        description: Force DeepEval on push (costs OpenAI credits)
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ── Shared env (stubs for non-LLM jobs) ──────────────────────────────────────
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION:   "20"
+  OPENAI_API_KEY:              sk-placeholder
+  EODHD_API_KEY:               demo
+  FMP_API_KEY:                 demo
+  FINNHUB_API_KEY:             demo
+  SEC_USER_AGENT:              "CI Bot ci@example.com"
+  REDIS_URL:                   redis://localhost:6379
+  DATABASE_URL:                "sqlite+aiosqlite:///./test.db"
+  PHOENIX_COLLECTOR_ENDPOINT:  http://localhost:6006/v1/traces
+  APP_ENV:                     testing
+  LOG_LEVEL:                   WARNING
+  CACHE_TTL_SECONDS:           "900"
+  CACHE_SIMILARITY_THRESHOLD:  "0.92"
+
+# ── Job 1: Python Lint ────────────────────────────────────────────────────────
+jobs:
+  lint-python:
+    name: "🐍 Python lint"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install --quiet ruff
+      - name: ruff check
+        run: ruff check app/ tests/
+      - name: ruff format check
+        run: ruff format --check app/ tests/
+
+  # ── Job 2: Frontend Lint ──────────────────────────────────────────────────
+  lint-frontend:
+    name: "⚛️  Frontend type-check"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package.json
+      - run: npm ci --prefer-offline
+      - name: TypeScript check
+        run: npm run type-check
+      - name: ESLint
+        run: npm run lint
+
+  # ── Job 3: Unit tests (no LLM, no external APIs) ─────────────────────────
+  unit-tests:
+    name: "🧪 Unit tests — schemas + indicators"
+    runs-on: ubuntu-latest
+    needs: lint-python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install --quiet -e ".[dev]"
+
+      - name: Pydantic schema contracts
+        run: |
+          pytest tests/test_evaluation.py \
+            -k "pydantic or schema or validation or rejected or normalised" \
+            -v --tb=short
+
+      - name: Technical indicator maths
+        run: |
+          pytest tests/test_technical.py \
+            -v --tb=short
+
+      - name: Memory + RAG unit tests
+        run: |
+          pytest tests/test_memory.py \
+            -v --tb=short
+
+      - name: Coverage report
+        run: |
+          pytest tests/ \
+            -k "pydantic or schema or technical or memory" \
+            --cov=app/schemas \
+            --cov=app/agents/tools \
+            --cov=app/memory \
+            --cov=app/rag \
+            --cov-report=xml:coverage-unit.xml \
+            --cov-report=term-missing \
+            -q
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage-unit.xml
+          retention-days: 14
+
+  # ── Job 4: Integration tests with mocked external calls ──────────────────
+  integration-tests:
+    name: "🔗 Integration tests — mocked pipeline"
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    services:
+      redis:
+        image: redis/redis-stack:latest
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install --quiet -e ".[dev]"
+
+      - name: Full pipeline integration (all external calls mocked)
+        run: |
+          pytest tests/test_integration.py \
+            -v --tb=short \
+            --cov=app \
+            --cov-report=xml:coverage-integration.xml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: coverage-integration.xml
+          retention-days: 14
+
+  # ── Job 5: DeepEval LLM quality gate ─────────────────────────────────────
+  deepeval:
+    name: "🤖 DeepEval quality gate"
+    runs-on: ubuntu-latest
+    needs: integration-tests
+    # Run on PRs to main OR manual dispatch with flag set
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_deepeval == true)
+
+    services:
+      redis:
+        image: redis/redis-stack:latest
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install --quiet -e ".[dev]"
+
+      - name: Configure DeepEval model
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: deepeval set-local-model --model-name gpt-4o-mini
+
+      - name: Run DeepEval quality gate
+        # -n 4  parallel workers
+        # -c    cache LLM eval calls between runs (saves credits on reruns)
+        # -i    print metric scores inline in terminal
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          deepeval test run tests/test_evaluation.py \
+            -n 4 \
+            -c \
+            -i \
+            --verbose \
+            --ignore-errors
+
+      - name: Upload DeepEval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepeval-results-${{ github.run_id }}
+          path: .deepeval/
+          retention-days: 30
+
+      - name: Comment evaluation summary on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## 🤖 DeepEval Quality Gate Results\n\n';
+            body += `**Run:** \`${{ github.sha }}\` · \`${{ github.run_id }}\`\n\n`;
+            try {
+              const raw = fs.readFileSync('.deepeval/latest_results.json', 'utf8');
+              const results = JSON.parse(raw);
+              body += '| Metric | Score | Threshold | Status |\n';
+              body += '|--------|-------|-----------|--------|\n';
+              for (const r of results) {
+                const icon = r.success ? '✅' : '❌';
+                const score = r.score != null ? r.score.toFixed(3) : 'N/A';
+                const threshold = r.threshold != null ? r.threshold.toFixed(2) : '—';
+                body += `| **${r.metric}** | ${score} | ${threshold} | ${icon} |\n`;
+              }
+              const passed = results.filter(r => r.success).length;
+              const total = results.length;
+              body += `\n**${passed}/${total} metrics passed**`;
+              if (passed < total) {
+                body += '\n\n> ⚠️ One or more quality metrics failed. Review the evaluation details above before merging.';
+              }
+            } catch (e) {
+              body += `_Results file unavailable — check job logs. Error: ${e.message}_`;
+            }
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+  # ── Job 6: Frontend build ─────────────────────────────────────────────────
+  frontend-build:
+    name: "🏗️  Next.js build"
+    runs-on: ubuntu-latest
+    needs: lint-frontend
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package.json
+      - run: npm ci --prefer-offline
+      - name: Build Next.js app
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: npm run build
+
+  # ── Job 7: Merge gate ────────────────────────────────────────────────────
+  merge-gate:
+    name: "✅ All checks passed"
+    runs-on: ubuntu-latest
+    needs: [lint-python, lint-frontend, unit-tests, integration-tests, deepeval, frontend-build]
+    if: always()
+    steps:
+      - name: Evaluate all job results
+        run: |
+          echo "=== Job Results ==="
+          echo "lint-python:       ${{ needs.lint-python.result }}"
+          echo "lint-frontend:     ${{ needs.lint-frontend.result }}"
+          echo "unit-tests:        ${{ needs.unit-tests.result }}"
+          echo "integration-tests: ${{ needs.integration-tests.result }}"
+          echo "deepeval:          ${{ needs.deepeval.result }}"
+          echo "frontend-build:    ${{ needs.frontend-build.result }}"
+          echo ""
+
+          # These must ALWAYS pass
+          REQUIRED=(
+            "${{ needs.lint-python.result }}"
+            "${{ needs.unit-tests.result }}"
+            "${{ needs.integration-tests.result }}"
+            "${{ needs.frontend-build.result }}"
+          )
+          for r in "${REQUIRED[@]}"; do
+            if [[ "$r" != "success" ]]; then
+              echo "❌ Required job failed (result=$r)"
+              exit 1
+            fi
+          done
+
+          # lint-frontend: allow skipped but not failure
+          if [[ "${{ needs.lint-frontend.result }}" == "failure" ]]; then
+            echo "❌ Frontend lint failed"
+            exit 1
+          fi
+
+          # DeepEval only required on PRs to main
+          EVAL="${{ needs.deepeval.result }}"
+          EVENT="${{ github.event_name }}"
+          if [[ "$EVENT" == "pull_request" && "$EVAL" == "failure" ]]; then
+            echo "❌ DeepEval quality gate failed — fix evaluation metrics before merging"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ All required checks passed — merge allowed"
