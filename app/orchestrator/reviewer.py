@@ -80,18 +80,29 @@ Respond with JSON: {{"score": float, "issues": [str, ...]}}
     before_sleep=before_sleep_log(logger, "warning"),
     reraise=True,
 )
-async def run_reviewer(research: AggregatedResearch) -> InvestmentThesis:
+async def run_reviewer(
+    research: AggregatedResearch,
+    compressed_context: str | None = None,
+) -> InvestmentThesis:
+    """
+    LLM review with optional compressed context.
+    
+    If compressed_context is provided, uses that instead of full serialization.
+    This reduces tokens from 7000+ to ~600 per request.
+    """
     today = date.today().isoformat()
 
     # Inject relevant corrections from experience bank
     corrections = await get_relevant_corrections(research.ticker, research.user_query)
     corrections_block = f"\nLEARNED CORRECTIONS (apply these):\n{corrections}" if corrections else ""
 
-    context = _serialise(research)
+    # Use compressed context if provided, otherwise serialize full research
+    context = compressed_context or _serialise(research)
 
     with tracer.start_as_current_span("reviewer_generate") as span:
         span.set_attribute("ticker", research.ticker)
         span.set_attribute("agents_completed", str(research.agents_completed))
+        span.set_attribute("using_compressed", bool(compressed_context))
 
         # ── Step 1: Generator (Gemini) ────────────────────────────────────────
         system_prompt = _GENERATOR_SYSTEM.format(

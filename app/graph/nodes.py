@@ -21,6 +21,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.telemetry import get_tracer
 from app.memory.store import retrieve_memory_context
+from app.orchestrator.compressor import compress_aggregated_research
 from app.orchestrator.reviewer import run_reviewer
 from app.schemas.models import (
     AggregatedResearch,
@@ -213,6 +214,9 @@ async def aggregator_node(state: AgentState) -> dict:
         fin = _safe_parse(FinancialDataAgentOutput, state.get("financial_output"), ticker)
         doc = _safe_parse(DocumentAgentOutput, state.get("document_output"), ticker)
 
+        # Compress all outputs for efficient LLM processing (7000 tokens → 600 tokens)
+        compressed_context = compress_aggregated_research(news, fin, doc)
+
         # Attach memory context to aggregated research if available
         memory_note = ""
         if state.get("memory_context"):
@@ -233,10 +237,12 @@ async def aggregator_node(state: AgentState) -> dict:
             ticker=ticker,
             completed=len(completed),
             failed=len(failed),
+            compressed_context_len=len(compressed_context),
         )
 
     return {
         "aggregated_research": research.model_dump(),
+        "compressed_research": compressed_context,
         "memory_note": memory_note,
     }
 
@@ -267,7 +273,9 @@ async def reviewer_node(state: AgentState) -> dict:
                     update={"user_query": research.user_query + memory_note}
                 )
 
-            thesis = await run_reviewer(research)
+            # Pass compressed research for efficient token usage
+            compressed = state.get("compressed_research", None)
+            thesis = await run_reviewer(research, compressed_context=compressed)
             logger.info(
                 "reviewer_success",
                 ticker=ticker,

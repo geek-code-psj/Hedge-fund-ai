@@ -67,7 +67,9 @@ class AgentState(TypedDict, total=False):
     financial_output: dict | None
     document_output: dict | None
     aggregated_research: dict | None
+    compressed_research: str  # Token-optimized context for LLM
     memory_context: str | None
+    memory_note: str | None
     thesis: dict | None
     # Use Annotated with operator.add for concurrent list updates (fan-out nodes)
     # This allows parallel nodes to update without "Can receive only one value per step" error
@@ -76,6 +78,7 @@ class AgentState(TypedDict, total=False):
     human_feedback_required: bool
     human_correction: dict | None
     error: str | None
+    reviewer_retries: int
 
 
 # ─── Technical Indicators ─────────────────────────────────────────────────────
