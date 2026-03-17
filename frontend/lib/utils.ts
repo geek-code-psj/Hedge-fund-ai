@@ -44,11 +44,12 @@ export function recommendationColor(rec: string | undefined) {
   }
 }
 
-export function riskColor(risk: "LOW" | "MEDIUM" | "HIGH" | undefined) {
+export function riskColor(risk: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" | undefined) {
   switch (risk) {
     case "LOW": return "text-green-500";
     case "MEDIUM": return "text-yellow-500";
     case "HIGH": return "text-red-500";
+    case "CRITICAL": return "text-rose-600 font-bold";
     default: return "text-zinc-500";
   }
 }
