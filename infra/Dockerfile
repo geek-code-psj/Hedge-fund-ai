@@ -12,8 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir .
+# Use 'uv' for 10-100x faster installation to avoid Railway build timeouts
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+RUN /root/.cargo/bin/uv pip install --system --no-cache .
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
