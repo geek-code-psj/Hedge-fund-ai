@@ -12,10 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
-# Use 'uv' for 10-100x faster installation to avoid Railway build timeouts
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-RUN /root/.cargo/bin/uv pip install --system --no-cache .
-
+# Use official 'uv' binary for 10-100x faster installation
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+RUN uv pip install --system --no-cache .
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
