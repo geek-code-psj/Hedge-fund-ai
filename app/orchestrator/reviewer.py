@@ -15,7 +15,7 @@ import asyncio
 import json
 from datetime import date
 
-
+import google.generativeai as genai
 import instructor
 from tenacity import (
     before_sleep_log,
@@ -35,7 +35,15 @@ logger = get_logger(__name__)
 settings = get_settings()
 tracer = get_tracer("reviewer")
 
-
+genai.configure(api_key=settings.gemini_api_key)
+_gemini_model = genai.GenerativeModel(
+    model_name=settings.gemini_model,
+    generation_config={"temperature": 0.1, "max_output_tokens": 2500},
+)
+_client = instructor.from_gemini(
+    client=_gemini_model,
+    mode=instructor.Mode.GEMINI_JSON,
+)
 
 _GENERATOR_SYSTEM = """\
 You are the lead equity analyst at a top-tier hedge fund.
@@ -64,10 +72,8 @@ Respond with JSON: {{"score": float, "issues": [str, ...]}}
 """
 
 
-import pydantic
-
 @retry(
-    retry=retry_if_exception_type((pydantic.ValidationError, ValueError)),
+    retry=retry_if_exception_type((instructor.exceptions.InstructorRetryException, ValueError)),
     wait=wait_exponential(multiplier=1, min=2, max=20),
     stop=stop_after_attempt(4),
     before_sleep=before_sleep_log(logger, "warning"),
@@ -81,17 +87,6 @@ async def run_reviewer(research: AggregatedResearch) -> InvestmentThesis:
     corrections_block = f"\nLEARNED CORRECTIONS (apply these):\n{corrections}" if corrections else ""
 
     context = _serialise(research)
-
-    import google.generativeai as genai
-    genai.configure(api_key=settings.gemini_api_key)
-    _gemini_model = genai.GenerativeModel(
-        model_name=settings.gemini_model,
-        generation_config={"temperature": 0.1, "max_output_tokens": 2500},
-    )
-    _client = instructor.from_gemini(
-        client=_gemini_model,
-        mode=instructor.Mode.GEMINI_JSON,
-    )
 
     with tracer.start_as_current_span("reviewer_generate") as span:
         span.set_attribute("ticker", research.ticker)
@@ -147,7 +142,6 @@ async def _critic_score(thesis: InvestmentThesis) -> float:
     Falls back to 1.0 (pass) if critic itself errors, to avoid blocking valid theses.
     """
     try:
-        import google.generativeai as genai
         critic_model = genai.GenerativeModel(settings.gemini_model)
         prompt = _CRITIC_PROMPT.format(
             thesis_json=thesis.model_dump_json(indent=2)[:3000]
