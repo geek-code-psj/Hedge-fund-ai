@@ -36,12 +36,10 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY app/ ./app/
 
 # Pre-download HuggingFace embedding model so cold start is fast
-# Wrapped in try/except because some platforms (Railway) block outbound internet during build
-RUN python -c "try: \
-                   from sentence_transformers import SentenceTransformer; \
-                   SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); \
-               except Exception as e: \
-                   print(f'Warning: pre-download failed, will download at runtime: {e}')" \
+# Uses bash '||' to make it non-fatal if Railway blocks outbound internet during build
+RUN (python -c "from sentence_transformers import SentenceTransformer; \
+               SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')" \
+     || echo "Warning: pre-download failed, will download at runtime") \
     && chown -R appuser:appuser /home/appuser
 
 USER appuser
