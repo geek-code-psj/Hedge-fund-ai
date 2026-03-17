@@ -1,0 +1,29 @@
+# .dockerignore
+# Prevents huge/unrelated directories from being copied to the Docker daemon.
+
+# Git
+.git
+.gitignore
+
+# Frontend code (backend container doesn't need Next.js, saves 200+ MB)
+frontend/
+node_modules/
+.next/
+
+# Python / Envs
+__pycache__/
+*.pyc
+venv/
+.venv/
+env/
+.env
+
+# Tests and Scripts
+tests/
+scripts/
+
+# DB and logs
+*.sqlite
+*.db
+logs/
+*.log
