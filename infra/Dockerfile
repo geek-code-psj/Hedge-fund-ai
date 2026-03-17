@@ -55,9 +55,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=15s --start-period=90s --retries=5 \
     CMD curl -sf http://localhost:8000/health || exit 1
 
-CMD ["uvicorn", "app.main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--workers", "1", \
-     "--loop", "uvloop", \
-     "--log-level", "info"]
+# Shell form (not array) so $PORT environment variable expands correctly
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --loop uvloop --log-level info
