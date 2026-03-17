@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import pydantic
 from datetime import date
 
 import google.generativeai as genai
@@ -73,7 +74,7 @@ Respond with JSON: {{"score": float, "issues": [str, ...]}}
 
 
 @retry(
-    retry=retry_if_exception_type((instructor.exceptions.InstructorRetryException, ValueError)),
+    retry=retry_if_exception_type((pydantic.ValidationError, ValueError)),
     wait=wait_exponential(multiplier=1, min=2, max=20),
     stop=stop_after_attempt(4),
     before_sleep=before_sleep_log(logger, "warning"),
