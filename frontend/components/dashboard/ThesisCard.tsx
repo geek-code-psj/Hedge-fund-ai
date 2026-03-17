@@ -3,10 +3,10 @@
 
 import { motion } from "framer-motion";
 import {
-  TrendingUp, TrendingDown, Minus, AlertTriangle,
-  Zap, Target, BarChart2, Users, Shield, ChevronRight,
+  TrendingUp, TrendingDown,
+  Zap, Target, BarChart2, Shield,
 } from "lucide-react";
-import { cn, recommendationBg, recommendationColor, riskColor, sentimentColor, fmtPct, fmt, fmtB } from "@/lib/utils";
+import { cn, recommendationBg, riskColor, fmtPct } from "@/lib/utils";
 import type { InvestmentThesis } from "@/types";
 
 interface ThesisCardProps {
