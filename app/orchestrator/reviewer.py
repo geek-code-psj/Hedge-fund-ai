@@ -261,7 +261,23 @@ async def run_reviewer(
     
     If compressed_context is provided, uses that instead of full serialization.
     This reduces tokens from 7000+ to ~600 per request.
+    
+    GUARANTEE: This function ALWAYS returns a valid InvestmentThesis.
+    It never raises exceptions. If LLM fails, it uses fallback thesis.
     """
+    try:
+        return await _run_reviewer_impl(research, compressed_context)
+    except Exception as exc:
+        # Final safety net: ANY uncaught exception falls back
+        logger.error("run_reviewer_unexpected_error_using_fallback", error=str(exc)[:200])
+        return _create_fallback_thesis(research)
+
+
+async def _run_reviewer_impl(
+    research: AggregatedResearch,
+    compressed_context: str | None = None,
+) -> InvestmentThesis:
+    """Internal implementation wrapped by safety exception handler."""
     today = date.today().isoformat()
 
     # Inject relevant corrections from experience bank
