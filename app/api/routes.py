@@ -296,6 +296,7 @@ async def debug_financial_api(ticker: str):
                 f"https://financialmodelingprep.com/api/v3/income-statement/{ticker}"
                 f"?period=quarter&limit=1&apikey={settings.fmp_api_key}"
             )
+            results["fmp"]["http_status"] = r.status_code
             r.raise_for_status()
             data = r.json()
             results["fmp"]["status"] = "ok" if data else "empty"
@@ -303,6 +304,29 @@ async def debug_financial_api(ticker: str):
                 results["fmp"]["sample"] = {"revenue": data[0].get("revenue"), "date": data[0].get("date")}
             else:
                 results["fmp"]["response"] = data
+        except httpx.HTTPStatusError as exc:
+            results["fmp"]["http_status"] = exc.response.status_code
+            results["fmp"]["error"] = f"{exc.response.status_code} {exc.response.reason_phrase}"
+            
+            # If 403, try a simpler free-tier endpoint
+            if exc.response.status_code == 403:
+                try:
+                    r2 = await http.get(
+                        f"https://financialmodelingprep.com/api/v3/profile/{ticker}"
+                        f"?apikey={settings.fmp_api_key}"
+                    )
+                    if r2.status_code == 200:
+                        results["fmp"]["alternate_test"] = "profile endpoint works (free tier accessible)"
+                        results["fmp"]["suggestion"] = "Use profile or quote endpoints instead of income-statement"
+                    else:
+                        results["fmp"]["alternate_test_status"] = r2.status_code
+                except:
+                    results["fmp"]["alternate_test"] = "failed"
+            
+            try:
+                results["fmp"]["response_body"] = exc.response.json()
+            except:
+                results["fmp"]["response_body"] = exc.response.text[:200]
         except Exception as exc:
             results["fmp"]["error"] = str(exc)
     

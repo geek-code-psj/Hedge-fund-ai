@@ -210,6 +210,12 @@ async def _fmp_request_with_retry(url: str) -> Any:
     """Make FMP request with exponential backoff on 429 errors."""
     async with httpx.AsyncClient(timeout=10.0) as http:
         r = await http.get(url)
+        # 403/401: Don't retry — account issue, return empty
+        if r.status_code in (403, 401):
+            logger.warning("fmp_permission_denied",
+                          status_code=r.status_code,
+                          message="FMP API key missing access to this endpoint — proceeding with EODHD data only")
+            return []
         if r.status_code == 429:
             logger.warning("fmp_rate_limit_429_retrying")
             raise Exception("Rate limit 429 — will retry")
@@ -224,6 +230,9 @@ async def _fetch_fmp(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
         logger.debug("fmp_demo_key_warning", ticker=ticker,
                     message="Using demo FMP key — fundamentals/insider data unavailable. Add FMP_API_KEY to .env")
         return {}
+    
+    key_status = "REAL" if key != "demo" else "DEMO"
+    logger.info("fmp_fetch_start", ticker=ticker, api_key_status=key_status)
 
     async def get(path: str):
         try:
