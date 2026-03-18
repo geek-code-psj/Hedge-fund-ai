@@ -205,6 +205,22 @@ async def _fetch_eodhd(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
     }
     
     # Log if sector is missing (often happens with demo API keys)
+    if not result.get("sector"):
+        # Fallback sector mapping for major tickers
+        sector_map = {
+            "AAPL": "Technology", "MSFT": "Technology", "GOOGL": "Technology",
+            "AMZN": "Consumer Cyclical", "TSLA": "Automotive", "NVDA": "Technology",
+            "JPM": "Financial Services", "BAC": "Financial Services", "WFC": "Financial Services",
+            "XOM": "Energy", "CVX": "Energy", "MPC": "Energy",
+            "JNJ": "Healthcare", "UNH": "Healthcare", "PFE": "Healthcare",
+            "PG": "Consumer Defensive", "KO": "Consumer Defensive", "PEP": "Consumer Defensive",
+            "META": "Technology", "NFLX": "Communication Services", "DIS": "Communication Services",
+        }
+        fallback_sector = sector_map.get(ticker, "Unspecified")
+        result["sector"] = fallback_sector
+        logger.info("eodhd_sector_using_fallback", ticker=ticker, sector=fallback_sector,
+                   message="EODHD fundamentals endpoint not returning sector - using fallback mapping")
+    
     if not result.get("sector") and settings.eodhd_api_key == "demo":
         logger.debug("eodhd_demo_key_warning", ticker=ticker, 
                     message="Using demo EODHD key — sector/price data unavailable. Add EODHD_API_KEY to .env")

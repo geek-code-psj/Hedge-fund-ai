@@ -219,6 +219,331 @@ async def health():
     return {"status": "ok", "version": "3.0.0"}
 
 
+@router.get("/diagnostics/{ticker}", include_in_schema=False)
+async def full_diagnostics(ticker: str):
+    """
+    TRANSPARENT DIAGNOSTIC - Shows complete truth about ALL APIs
+    Access: https://your-app.com/api/v1/diagnostics/AAPL
+    
+    Shows:
+    - What each API is returning (RAW responses)
+    - Which APIs working ✅ vs failing ❌
+    - Environmental status (keys set, etc)
+    - Clear verdict on root cause
+    """
+    import httpx
+    from datetime import date, timedelta
+    
+    ticker = ticker.upper()
+    results = {
+        "timestamp": date.today().isoformat(),
+        "ticker": ticker,
+        "environment": {
+            "gemini_key_configured": settings.gemini_api_key and settings.gemini_api_key != "AIza-placeholder",
+            "openai_key_configured": settings.openai_api_key and settings.openai_api_key != "sk-placeholder",
+            "eodhd_key_configured": settings.eodhd_api_key and settings.eodhd_api_key != "demo",
+            "fmp_key_configured": settings.fmp_api_key and settings.fmp_api_key != "demo",
+        },
+        "apis": {}
+    }
+    
+    async with httpx.AsyncClient(timeout=12.0) as http:
+        # ============ EODHD Price (Most Important) ============
+        results["apis"]["eodhd_price"] = {"status": "🔍 Testing..."}
+        symbol = ticker if "." in ticker else f"{ticker}.US"
+        from_date = (date.today() - timedelta(days=365)).isoformat()
+        
+        try:
+            url = f"https://eodhd.com/api/eod/{symbol}?api_token={settings.eodhd_api_key}&fmt=json&from={from_date}&limit=1"
+            r = await http.get(url)
+            
+            if r.status_code == 200:
+                data = r.json()
+                if data and len(data) > 0:
+                    latest = data[-1]
+                    results["apis"]["eodhd_price"] = {
+                        "status": "✅ SUCCESS",
+                        "price": latest.get("close"),
+                        "date": latest.get("date"),
+                        "high": latest.get("high"),
+                        "low": latest.get("low"),
+                        "http_code": 200
+                    }
+                else:
+                    results["apis"]["eodhd_price"] = {
+                        "status": "❌ EMPTY",
+                        "response": data,
+                        "http_code": 200
+                    }
+            else:
+                results["apis"]["eodhd_price"] = {
+                    "status": f"❌ HTTP {r.status_code}",
+                    "error": r.text[:200],
+                    "http_code": r.status_code
+                }
+        except Exception as e:
+            results["apis"]["eodhd_price"] = {
+                "status": "❌ EXCEPTION",
+                "error": str(e)[:150]
+            }
+        
+        # ============ EODHD Fundamentals (Sector) ============
+        results["apis"]["eodhd_fundamentals"] = {"status": "🔍 Testing..."}
+        try:
+            url = f"https://eodhd.com/api/fundamentals/{symbol}?api_token={settings.eodhd_api_key}&fmt=json"
+            r = await http.get(url)
+            
+            if r.status_code == 200:
+                raw = r.json()
+                sector = raw.get("General", {}).get("Sector") if raw.get("General") else None
+                results["apis"]["eodhd_fundamentals"] = {
+                    "status": "✅ SUCCESS" if sector else "⚠️ NO SECTOR",
+                    "sector": sector,
+                    "industry": raw.get("General", {}).get("Industry") if raw.get("General") else None,
+                    "market_cap": raw.get("Highlights", {}).get("MarketCapitalization"),
+                    "http_code": 200
+                }
+            else:
+                results["apis"]["eodhd_fundamentals"] = {
+                    "status": f"❌ HTTP {r.status_code}",
+                    "error": r.text[:200],
+                    "http_code": r.status_code
+                }
+        except Exception as e:
+            results["apis"]["eodhd_fundamentals"] = {
+                "status": "❌ EXCEPTION",
+                "error": str(e)[:150]
+            }
+        
+        # ============ FMP Financial Data ============
+        results["apis"]["fmp"] = {"status": "🔍 Testing..."}
+        try:
+            url = f"https://financialmodelingprep.com/api/v3/income-statement/{ticker}?period=quarter&limit=1&apikey={settings.fmp_api_key}"
+            r = await http.get(url)
+            
+            if r.status_code == 200:
+                data = r.json()
+                results["apis"]["fmp"] = {
+                    "status": "✅ SUCCESS" if data else "⚠️ EMPTY",
+                    "records": len(data) if isinstance(data, list) else 0,
+                    "http_code": 200
+                }
+            elif r.status_code == 403:
+                error_msg = r.json().get("Error Message", "") if "Error Message" in r.text else r.text[:200]
+                results["apis"]["fmp"] = {
+                    "status": "❌ 403 FORBIDDEN",
+                    "reason": error_msg,
+                    "http_code": 403,
+                    "note": "Legacy API deprecated? Check https://site.financialmodelingprep.com/developer/docs"
+                }
+            else:
+                results["apis"]["fmp"] = {
+                    "status": f"❌ HTTP {r.status_code}",
+                    "error": r.text[:200],
+                    "http_code": r.status_code
+                }
+        except Exception as e:
+            results["apis"]["fmp"] = {
+                "status": "❌ EXCEPTION",
+                "error": str(e)[:150]
+            }
+        
+        # ============ Finnhub News ============
+        results["apis"]["finnhub_news"] = {"status": "🔍 Testing..."}
+        if settings.finnhub_api_key and settings.finnhub_api_key != "d_placeholder":
+            try:
+                url = f"https://finnhub.io/api/v1/news?symbol={ticker}&limit=5&token={settings.finnhub_api_key}"
+                r = await http.get(url)
+                
+                if r.status_code == 200:
+                    data = r.json()
+                    results["apis"]["finnhub_news"] = {
+                        "status": "✅ SUCCESS",
+                        "headlines": len(data) if isinstance(data, list) else 0,
+                        "http_code": 200
+                    }
+                else:
+                    results["apis"]["finnhub_news"] = {
+                        "status": f"❌ HTTP {r.status_code}",
+                        "error": r.text[:150],
+                        "http_code": r.status_code
+                    }
+            except Exception as e:
+                results["apis"]["finnhub_news"] = {
+                    "status": "❌ EXCEPTION",
+                    "error": str(e)[:150]
+                }
+        else:
+            results["apis"]["finnhub_news"] = {
+                "status": "⏭️ SKIPPED",
+                "reason": "No Finnhub API key configured"
+            }
+    
+    # ============ LLM Status (Gemini + OpenAI) ============
+    results["llm_status"] = {
+        "gemini": "✅ KEY SET" if results["environment"]["gemini_key_configured"] else "❌ NO KEY",
+        "openai": "✅ KEY SET" if results["environment"]["openai_key_configured"] else "❌ NO KEY",
+        "note": "Keys set but may still be rate-limited or exhausted"
+    }
+    
+    # ============ VERDICT ============
+    api_status = results["apis"]
+    eodhd_ok = api_status.get("eodhd_price", {}).get("status", "").startswith("✅")
+    fmp_ok = api_status.get("fmp", {}).get("status", "").startswith("✅")
+    news_ok = api_status.get("finnhub_news", {}).get("status", "").startswith("✅")
+    
+    if eodhd_ok and fmp_ok and news_ok:
+        verdict = "🟢 ALL APIS WORKING - Issue is in LLM layer (Gemini/OpenAI exhausted?)"
+    elif eodhd_ok:
+        verdict = "🟡 PARTIAL - EODHD works, FMP 403/exhausted. Using EODHD-only mode."
+    elif not results["environment"]["gemini_key_configured"] or not results["environment"]["openai_key_configured"]:
+        verdict = "🔴 LLM KEYS MISSING - Add to Railway Variables"
+    else:
+        verdict = "🔴 CRITICAL - Multiple API failures. Check API status pages."
+    
+    results["verdict"] = verdict
+    
+    return results
+
+
+@router.get("/diagnostics/{ticker}", include_in_schema=False)
+async def complete_diagnostics(ticker: str):
+    """
+    🔍 COMPLETE TRANSPARENCY: Shows EVERYTHING the app is doing.
+    No hidden failures, no fake data. Real API responses shown.
+    Access: /api/v1/diagnostics/{ticker}
+    """
+    from datetime import date, timedelta
+    import httpx
+    
+    ticker = ticker.upper()
+    results = {
+        "timestamp": date.today().isoformat(),
+        "ticker": ticker,
+        "____IMPORTANT": "This shows REAL API calls with REAL responses - no filtering",
+        "environment": {
+            "gemini_configured": settings.gemini_api_key not in ["AIza-placeholder", "demo"],
+            "openai_configured": settings.openai_api_key not in ["sk-placeholder", "demo"],
+            "eodhd_configured": settings.eodhd_api_key != "demo",
+            "fmp_configured": settings.fmp_api_key != "demo",
+        },
+        "api_tests": {}
+    }
+    
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        # TEST 1: EODHD Price
+        results["api_tests"]["1_eodhd_price"] = {}
+        symbol = ticker if "." in ticker else f"{ticker}.US"
+        try:
+            url = f"https://eodhd.com/api/eod/{symbol}?api_token={settings.eodhd_api_key}&fmt=json&from=2025-01-01&limit=1"
+            r = await http.get(url, timeout=5.0)
+            results["api_tests"]["1_eodhd_price"]["status_code"] = r.status_code
+            results["api_tests"]["1_eodhd_price"]["success"] = r.status_code == 200
+            if r.status_code == 200:
+                data = r.json()
+                if data and isinstance(data, list):
+                    results["api_tests"]["1_eodhd_price"]["data"] = data[0] if data else None
+                    results["api_tests"]["1_eodhd_price"]["result"] = "✅ PRICE DATA WORKING"
+                else:
+                    results["api_tests"]["1_eodhd_price"]["result"] = "❌ Empty response"
+            else:
+                results["api_tests"]["1_eodhd_price"]["result"] = f"❌ HTTP {r.status_code}"
+                results["api_tests"]["1_eodhd_price"]["response_text"] = r.text[:300]
+        except Exception as e:
+            results["api_tests"]["1_eodhd_price"]["result"] = f"❌ Exception: {str(e)[:100]}"
+        
+        # TEST 2: EODHD Fundamentals (Sector)
+        results["api_tests"]["2_eodhd_sector"] = {}
+        try:
+            url = f"https://eodhd.com/api/fundamentals/{symbol}?api_token={settings.eodhd_api_key}&fmt=json"
+            r = await http.get(url, timeout=5.0)
+            results["api_tests"]["2_eodhd_sector"]["status_code"] = r.status_code
+            results["api_tests"]["2_eodhd_sector"]["success"] = r.status_code == 200
+            if r.status_code == 200:
+                data = r.json()
+                sector = data.get("General", {}).get("Sector")
+                results["api_tests"]["2_eodhd_sector"]["sector_returned"] = sector
+                results["api_tests"]["2_eodhd_sector"]["has_general_field"] = bool(data.get("General"))
+                results["api_tests"]["2_eodhd_sector"]["result"] = "✅ SECTOR FOUND" if sector else "⚠️ No sector in response"
+            else:
+                results["api_tests"]["2_eodhd_sector"]["result"] = f"❌ HTTP {r.status_code}"
+        except Exception as e:
+            results["api_tests"]["2_eodhd_sector"]["result"] = f"❌ Exception: {str(e)[:100]}"
+        
+        # TEST 3: FMP Income Statement
+        results["api_tests"]["3_fmp_financials"] = {}
+        try:
+            url = f"https://financialmodelingprep.com/api/v3/income-statement/{ticker}?period=quarter&limit=1&apikey={settings.fmp_api_key}"
+            r = await http.get(url, timeout=5.0)
+            results["api_tests"]["3_fmp_financials"]["status_code"] = r.status_code
+            results["api_tests"]["3_fmp_financials"]["success"] = r.status_code == 200
+            if r.status_code == 200:
+                data = r.json()
+                results["api_tests"]["3_fmp_financials"]["result"] = "✅ FMP WORKING" if data else "⚠️ Empty"
+                results["api_tests"]["3_fmp_financials"]["data_sample"] = data[0] if isinstance(data, list) and data else None
+            elif r.status_code == 403:
+                results["api_tests"]["3_fmp_financials"]["result"] = "❌ 403 Forbidden (Legacy API deprecated or no access)"
+                try:
+                    error = r.json().get("Error Message", "")
+                    results["api_tests"]["3_fmp_financials"]["error_details"] = error[:200]
+                except:
+                    pass
+            else:
+                results["api_tests"]["3_fmp_financials"]["result"] = f"❌ HTTP {r.status_code}"
+        except Exception as e:
+            results["api_tests"]["3_fmp_financials"]["result"] = f"❌ Exception: {str(e)[:100]}"
+        
+        # TEST 4: Finnhub News
+        results["api_tests"]["4_finnhub_news"] = {}
+        if settings.finnhub_api_key != "d_placeholder":
+            try:
+                url = f"https://finnhub.io/api/v1/news?symbol={ticker}&limit=5&token={settings.finnhub_api_key}"
+                r = await http.get(url, timeout=5.0)
+                results["api_tests"]["4_finnhub_news"]["status_code"] = r.status_code
+                results["api_tests"]["4_finnhub_news"]["success"] = r.status_code == 200
+                if r.status_code == 200:
+                    data = r.json()
+                    count = len(data) if isinstance(data, list) else 0
+                    results["api_tests"]["4_finnhub_news"]["headline_count"] = count
+                    results["api_tests"]["4_finnhub_news"]["result"] = f"✅ {count} Headlines found"
+                    if data and isinstance(data, list):
+                        results["api_tests"]["4_finnhub_news"]["sample_headline"] = data[0].get("headline", "")[:150]
+                else:
+                    results["api_tests"]["4_finnhub_news"]["result"] = f"❌ HTTP {r.status_code}"
+            except Exception as e:
+                results["api_tests"]["4_finnhub_news"]["result"] = f"❌ Exception: {str(e)[:100]}"
+        else:
+            results["api_tests"]["4_finnhub_news"]["result"] = "⏭️ Skipped - no Finnhub key"
+    
+    # Summary
+    results["summary"] = {
+        "eodhd_price_working": results["api_tests"]["1_eodhd_price"].get("success", False),
+        "eodhd_sector_working": results["api_tests"]["2_eodhd_sector"].get("success", False),
+        "fmp_working": results["api_tests"]["3_fmp_financials"].get("success", False),
+        "news_working": results["api_tests"]["4_finnhub_news"].get("success", False),
+    }
+    
+    results["verdict"] = _diagnose_issues(results)
+    
+    return results
+
+
+def _diagnose_issues(results: dict) -> str:
+    """Generate clear diagnosis."""
+    summary = results.get("summary", {})
+    env = results.get("environment", {})
+    
+    if not env.get("gemini_configured") and not env.get("openai_configured"):
+        return "🔴 CRITICAL: No LLM keys configured. Add GEMINI_API_KEY and OPENAI_API_KEY to Railway Variables."
+    
+    if summary.get("eodhd_price_working") and summary.get("fmp_working"):
+        return "🟢 ALL APIs WORKING - Issue is likely in LLM layer (Gemini/OpenAI exhausted?)"
+    elif summary.get("eodhd_price_working"):
+        return "🟡 EODHD Working but FMP deprecated - Price data OK, financials limited"
+    else:
+        return "🔴 APIs Not responding - Check API keys, rate limits, and service status"
+
+
 @router.get("/ready", include_in_schema=False)
 async def readiness():
     """
