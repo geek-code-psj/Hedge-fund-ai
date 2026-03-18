@@ -21,7 +21,7 @@ export default function DiagnosticsPage() {
       const data = await response.json();
       setDiagnostics(data);
     } catch (err) {
-      setError(err.message);
+      setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
     }
