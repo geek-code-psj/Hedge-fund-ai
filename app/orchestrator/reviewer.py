@@ -17,7 +17,10 @@ import pydantic
 import warnings
 from datetime import date
 
+# Suppress deprecation and future warnings from google.generativeai  
 warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="google.generativeai")
+
 import google.generativeai as genai
 import instructor
 from openai import OpenAI, RateLimitError
@@ -40,15 +43,34 @@ settings = get_settings()
 tracer = get_tracer("reviewer")
 
 # ── Initialize both Gemini and OpenAI clients ────────────────────────────────
-genai.configure(api_key=settings.gemini_api_key)
-_gemini_model = genai.GenerativeModel(
-    model_name=settings.gemini_model,
-    generation_config={"temperature": 0.1, "max_output_tokens": 2500},
-)
-_client = instructor.from_gemini(
-    client=_gemini_model,
-    mode=instructor.Mode.GEMINI_JSON,
-)
+_gemini_model = None
+_client = None
+_gemini_initialized = False
+
+def _initialize_gemini():
+    """Initialize Gemini client with error handling."""
+    global _gemini_model, _client, _gemini_initialized
+    if _gemini_initialized:
+        return
+    
+    try:
+        genai.configure(api_key=settings.gemini_api_key)
+        _gemini_model = genai.GenerativeModel(
+            model_name=settings.gemini_model,
+            generation_config={"temperature": 0.1, "max_output_tokens": 2500},
+        )
+        _client = instructor.from_gemini(
+            client=_gemini_model,
+            mode=instructor.Mode.GEMINI_JSON,
+        )
+        _gemini_initialized = True
+        logger.info("gemini_client_initialized_successfully")
+    except Exception as exc:
+        logger.error("gemini_client_initialization_failed", error=str(exc)[:200])
+        _gemini_initialized = False
+
+# Initialize on module load
+_initialize_gemini()
 
 # ── OpenAI fallback (for when Gemini quota exhausted) ──────────────────────
 _openai_client = None
@@ -245,13 +267,6 @@ def _create_fallback_thesis(research: AggregatedResearch) -> InvestmentThesis:
     )
 
 
-@retry(
-    retry=retry_if_exception_type((pydantic.ValidationError, ValueError)),
-    wait=wait_exponential(multiplier=1, min=2, max=60),  # Increased max wait to 60s for rate limits
-    stop=stop_after_attempt(5),  # Increased attempts to 5
-    before_sleep=before_sleep_log(logger, "warning"),
-    reraise=True,
-)
 async def run_reviewer(
     research: AggregatedResearch,
     compressed_context: str | None = None,
@@ -271,6 +286,15 @@ async def run_reviewer(
         # Final safety net: ANY uncaught exception falls back
         logger.error("run_reviewer_unexpected_error_using_fallback", error=str(exc)[:200])
         return _create_fallback_thesis(research)
+
+
+@retry(
+    retry=retry_if_exception_type((pydantic.ValidationError, ValueError)),
+    wait=wait_exponential(multiplier=1, min=2, max=60),
+    stop=stop_after_attempt(5),
+    before_sleep=before_sleep_log(logger, "warning"),
+    reraise=True,
+)
 
 
 async def _run_reviewer_impl(
@@ -308,6 +332,10 @@ async def _run_reviewer_impl(
         llm_used = "gemini"  # Default to gemini, updated if fallback/openai used
         
         try:
+            # Check if Gemini is initialized
+            if not _client:
+                raise RuntimeError("Gemini client not initialized - falling back to OpenAI")
+                
             # Try Gemini first
             thesis = await asyncio.get_event_loop().run_in_executor(
                 None,
