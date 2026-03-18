@@ -46,9 +46,12 @@ async def _fetch_all(ticker: str, http: httpx.AsyncClient) -> FinancialDataAgent
     insiders = insiders if isinstance(insiders, list) else []
 
     # FIX: Proper None handling for current_price
-    # Don't convert 0 to None — only None if truly missing
+    # Only None if truly missing/null — 0 is a valid price floor
     close = eod.get("close")
-    current_price = float(close) if close is not None and close != 0 else (None if close is None else float(close))
+    try:
+        current_price = float(close) if close is not None else None
+    except (TypeError, ValueError):
+        current_price = None
 
     # Technical indicators
     technicals = None
@@ -112,12 +115,36 @@ async def _fetch_eodhd_with_retry(url: str) -> dict[str, Any]:
             logger.warning("eodhd_rate_limit_429_retrying", retry_after=r.headers.get("Retry-After"))
             raise Exception("Rate limit 429 — will retry")
         r.raise_for_status()
-        return r.json() or []
+        data = r.json() or []
+        
+        # DEBUG LOGGING: See what EODHD is actually returning
+        if data and isinstance(data, list):
+            logger.info("eodhd_response_success",
+                       status_code=r.status_code,
+                       records_count=len(data),
+                       latest_close=data[-1].get("close") if data else None,
+                       latest_date=data[-1].get("date") if data else None,
+                       sample_record=data[-1] if data else None)
+        else:
+            logger.warning("eodhd_response_empty_or_invalid",
+                          status_code=r.status_code,
+                          data_type=type(data).__name__,
+                          data_length=len(data) if isinstance(data, list) else "N/A")
+        
+        return data
 
 async def _fetch_eodhd(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
     from datetime import date, timedelta
     symbol = ticker if "." in ticker else f"{ticker}.US"
     from_date = (date.today() - timedelta(days=365)).isoformat()
+    
+    # DEBUG: Log API key status at start
+    key_status = "REAL" if settings.eodhd_api_key != "demo" else "DEMO"
+    logger.info("eodhd_fetch_start",
+               ticker=ticker,
+               symbol=symbol,
+               api_key_status=key_status,
+               from_date=from_date)
     
     try:
         url = (f"https://eodhd.com/api/eod/{symbol}"
@@ -128,7 +155,11 @@ async def _fetch_eodhd(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
         return {}
 
     if not data:
-        logger.warning("eodhd_no_data", ticker=ticker, api_key_is_demo=(settings.eodhd_api_key == "demo"))
+        logger.warning("eodhd_no_data", 
+                      ticker=ticker,
+                      symbol=symbol,
+                      api_key_is_demo=(settings.eodhd_api_key == "demo"),
+                      message="EODHD returned empty response — check API key in Railway Variables (EODHD_API_KEY)")
         return {}
 
     latest = data[-1]
