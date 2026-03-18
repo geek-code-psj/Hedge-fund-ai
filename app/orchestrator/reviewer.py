@@ -26,7 +26,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from app.core.config import get_settings
+from app.core.config import get_settings, get_next_gemini_api_key
 from app.core.logging import get_logger
 from app.core.telemetry import get_tracer
 from app.memory.store import get_relevant_corrections
@@ -36,7 +36,8 @@ logger = get_logger(__name__)
 settings = get_settings()
 tracer = get_tracer("reviewer")
 
-genai.configure(api_key=settings.gemini_api_key)
+# Use rotated API key for initial configuration
+genai.configure(api_key=get_next_gemini_api_key())
 _gemini_model = genai.GenerativeModel(
     model_name=settings.gemini_model,
     generation_config={"temperature": 0.1, "max_output_tokens": 2500},
@@ -89,6 +90,7 @@ async def run_reviewer(
     
     If compressed_context is provided, uses that instead of full serialization.
     This reduces tokens from 7000+ to ~600 per request.
+    Rotates between multiple Gemini API keys to avoid rate limits (429 errors).
     """
     today = date.today().isoformat()
 
@@ -98,6 +100,16 @@ async def run_reviewer(
 
     # Use compressed context if provided, otherwise serialize full research
     context = compressed_context or _serialise(research)
+
+    # Reconfigure API key on each attempt (rotates on retry for rate limit resilience)
+    genai.configure(api_key=get_next_gemini_api_key())
+    current_client = instructor.from_gemini(
+        client=genai.GenerativeModel(
+            model_name=settings.gemini_model,
+            generation_config={"temperature": 0.1, "max_output_tokens": 2500},
+        ),
+        mode=instructor.Mode.GEMINI_JSON,
+    )
 
     with tracer.start_as_current_span("reviewer_generate") as span:
         span.set_attribute("ticker", research.ticker)
@@ -118,7 +130,7 @@ async def run_reviewer(
 
         thesis: InvestmentThesis = await asyncio.get_event_loop().run_in_executor(
             None,
-            lambda: _client.chat.completions.create(
+            lambda: current_client.chat.completions.create(
                 response_model=InvestmentThesis,
                 messages=[{"role": "user", "content": combined_prompt}],
             ),
@@ -154,6 +166,8 @@ async def _critic_score(thesis: InvestmentThesis) -> float:
     Falls back to 1.0 (pass) if critic itself errors, to avoid blocking valid theses.
     """
     try:
+        # Use rotated API key for critic model to avoid rate limits
+        genai.configure(api_key=get_next_gemini_api_key())
         critic_model = genai.GenerativeModel(settings.gemini_model)
         prompt = _CRITIC_PROMPT.format(
             thesis_json=thesis.model_dump_json(indent=2)[:3000]

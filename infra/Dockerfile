@@ -36,6 +36,11 @@ RUN uv pip install --system --no-cache \
     openinference-instrumentation-openai \
     slowapi PyJWT structlog
 
+# Pre-download ONNX model at build time (prevents 79MB download on first request)
+ENV CHROMA_CACHE=/home/appuser/.cache/chroma
+RUN mkdir -p $CHROMA_CACHE && \
+    python -c "from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2; ONNXMiniLM_L6_V2()"
+
 # Copy application source
 COPY app/ ./app/
 
