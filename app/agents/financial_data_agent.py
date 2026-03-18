@@ -182,8 +182,17 @@ async def _fetch_eodhd(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
                 "sector": raw.get("General", {}).get("Sector"),
                 "industry": raw.get("General", {}).get("Industry"),
             }
+            logger.info("eodhd_fundamentals_extracted", 
+                       ticker=ticker,
+                       sector=fund.get("sector"),
+                       industry=fund.get("industry"),
+                       has_general=bool(raw.get("General")))
+        else:
+            logger.warning("eodhd_fundamentals_http_error", ticker=ticker, status=fr.status_code)
+        else:
+            logger.warning("eodhd_fundamentals_http_error", ticker=ticker, status=fr.status_code)
     except Exception as exc:
-        logger.debug("eodhd_fundamentals_failed", ticker=ticker, error=str(exc))
+        logger.debug("eodhd_fundamentals_failed", ticker=ticker, error=str(exc)[:200])
 
     result = {
         "close": latest.get("close"),
