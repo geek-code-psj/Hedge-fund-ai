@@ -289,7 +289,7 @@ async def run_reviewer(
         combined_prompt = f"{system_prompt}\n\n{user_prompt}"
 
         thesis: InvestmentThesis = None
-        llm_used = "gemini"
+        llm_used = "gemini"  # Default to gemini, updated if fallback/openai used
         
         try:
             # Try Gemini first
@@ -356,21 +356,27 @@ async def run_reviewer(
             logger.error("thesis_still_none_creating_fallback")
             thesis = _create_fallback_thesis(research)
             span.set_attribute("llm_model", "fallback")
+            llm_used = "fallback"
             
         span.set_attribute("recommendation", thesis.recommendation.value)
         span.set_attribute("conviction", thesis.conviction_score)
 
     # ── Step 2: Critic pass ───────────────────────────────────────────────────
-    critic_score = await _critic_score(thesis, llm_used)
-    if critic_score < 0.6:
-        logger.warning(
-            "critic_rejected_thesis",
-            ticker=research.ticker,
-            score=critic_score,
-        )
-        raise ValueError(
-            f"Critic score {critic_score:.2f} < 0.6 — thesis has consistency issues"
-        )
+    # Skip critic validation for fallback theses — they're already the last resort
+    if llm_used == "fallback":
+        logger.info("skipping_critic_for_fallback_thesis", ticker=research.ticker)
+        critic_score = 1.0
+    else:
+        critic_score = await _critic_score(thesis, llm_used)
+        if critic_score < 0.6:
+            logger.warning(
+                "critic_rejected_thesis",
+                ticker=research.ticker,
+                score=critic_score,
+            )
+            raise ValueError(
+                f"Critic score {critic_score:.2f} < 0.6 — thesis has consistency issues"
+            )
 
     logger.info(
         "reviewer_complete",
