@@ -137,8 +137,7 @@ async def run_analysis_stream(
 
                 elif node_name == "financial_node" and node_output.get("financial_output"):
                     fo = node_output["financial_output"]
-                    price = fo.get("price", {}) or {}
-                    close = price.get("close", "N/A")
+                    close = fo.get("current_price", "N/A")
                     sector = fo.get("sector", "N/A")
                     yield _sse("agent_result", SSEAgentResultEvent(
                         session_id=session_id,
