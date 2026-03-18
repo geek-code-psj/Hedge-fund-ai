@@ -2,10 +2,22 @@
 
 import { useState } from 'react';
 
+interface ApiData {
+  status?: string;
+  [key: string]: any;
+}
+
 interface DiagnosticsData {
   timestamp?: string;
   ticker: string;
   verdict: string;
+  apis: Record<string, ApiData>;
+  llm_status: {
+    gemini: string;
+    openai: string;
+    note: string;
+  };
+  environment?: Record<string, boolean | string>;
   [key: string]: any;
 }
 
@@ -93,7 +105,7 @@ export default function DiagnosticsPage() {
             <div className="bg-slate-700 p-6 rounded-lg">
               <h2 className="text-xl font-bold text-white mb-4">🔐 Environment Keys</h2>
               <div className="grid grid-cols-2 gap-4">
-                {Object.entries(diagnostics.environment).map(([key, value]) => (
+                {Object.entries(diagnostics.environment || {}).map(([key, value]) => (
                   <div key={key} className="flex items-center gap-2">
                     <span className={value ? '✅' : '❌'}></span>
                     <span className="text-slate-300">
@@ -109,19 +121,21 @@ export default function DiagnosticsPage() {
               <h2 className="text-xl font-bold text-white mb-4">🤖 LLM Status</h2>
               <div className="grid grid-cols-2 gap-4">
                 <div className="text-slate-300">
-                  <strong>Gemini:</strong> <span className="ml-2">{diagnostics.llm_status.gemini}</span>
+                  <strong>Gemini:</strong> <span className="ml-2">{diagnostics.llm_status?.gemini || 'N/A'}</span>
                 </div>
                 <div className="text-slate-300">
-                  <strong>OpenAI:</strong> <span className="ml-2">{diagnostics.llm_status.openai}</span>
+                  <strong>OpenAI:</strong> <span className="ml-2">{diagnostics.llm_status?.openai || 'N/A'}</span>
                 </div>
               </div>
-              <p className="text-slate-400 text-sm mt-3 italic">{diagnostics.llm_status.note}</p>
+              <p className="text-slate-400 text-sm mt-3 italic">{diagnostics.llm_status?.note || ''}</p>
             </div>
 
             {/* API Results */}
             <div className="space-y-4">
               <h2 className="text-xl font-bold text-white">📡 API Responses</h2>
-              {Object.entries(diagnostics.apis).map(([api_name, api_data]) => (
+              {Object.entries(diagnostics.apis || {}).map(([api_name, api_data_raw]) => {
+                const api_data = api_data_raw as ApiData;
+                return (
                 <div key={api_name} className="bg-slate-700 p-4 rounded-lg">
                   <div className="flex items-center justify-between mb-3">
                     <span className="font-semibold text-white">
@@ -137,7 +151,8 @@ export default function DiagnosticsPage() {
                     <pre>{JSON.stringify(api_data, null, 2)}</pre>
                   </div>
                 </div>
-              ))}
+              );
+              })}
             </div>
 
             {/* Interpretation Guide */}
