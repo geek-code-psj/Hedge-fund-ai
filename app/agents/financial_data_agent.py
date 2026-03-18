@@ -1,12 +1,14 @@
 """
-app/agents/financial_data_agent.py  v3
+app/agents/financial_data_agent.py  v4
 EODHD (price + history + fundamentals) + FMP (financials + insider trades)
 + Technical Indicators (RSI/MACD/Bollinger/SMA via pandas-ta)
+With exponential backoff retry on rate limits (429 errors).
 """
 from __future__ import annotations
 import asyncio
 from typing import Any
 import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from app.agents.tools.technical_analysis import compute_indicators
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -43,7 +45,10 @@ async def _fetch_all(ticker: str, http: httpx.AsyncClient) -> FinancialDataAgent
     fmp = fmp if isinstance(fmp, dict) else {}
     insiders = insiders if isinstance(insiders, list) else []
 
-    current_price = float(eod.get("close") or 0) or None
+    # FIX: Proper None handling for current_price
+    # Don't convert 0 to None — only None if truly missing
+    close = eod.get("close")
+    current_price = float(close) if close is not None and close != 0 else (None if close is None else float(close))
 
     # Technical indicators
     technicals = None
@@ -98,20 +103,28 @@ async def _fetch_all(ticker: str, http: httpx.AsyncClient) -> FinancialDataAgent
     )
 
 
+@retry(wait=wait_exponential(multiplier=1, min=1, max=8), stop=stop_after_attempt(3), reraise=True)
+async def _fetch_eodhd_with_retry(url: str) -> dict[str, Any]:
+    """Fetch from EODHD with exponential backoff on 429 rate limit errors."""
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        r = await http.get(url)
+        if r.status_code == 429:
+            logger.warning("eodhd_rate_limit_429_retrying", retry_after=r.headers.get("Retry-After"))
+            raise Exception("Rate limit 429 — will retry")
+        r.raise_for_status()
+        return r.json() or []
+
 async def _fetch_eodhd(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
     from datetime import date, timedelta
     symbol = ticker if "." in ticker else f"{ticker}.US"
     from_date = (date.today() - timedelta(days=365)).isoformat()
     
     try:
-        r = await http.get(
-            f"https://eodhd.com/api/eod/{symbol}"
-            f"?api_token={settings.eodhd_api_key}&fmt=json&from={from_date}"
-        )
-        r.raise_for_status()
-        data = r.json() or []
+        url = (f"https://eodhd.com/api/eod/{symbol}"
+               f"?api_token={settings.eodhd_api_key}&fmt=json&from={from_date}")
+        data = await _fetch_eodhd_with_retry(url)
     except Exception as exc:
-        logger.warning("eodhd_eod_fetch_failed", ticker=ticker, error=str(exc))
+        logger.warning("eodhd_eod_fetch_failed", ticker=ticker, error=str(exc)[:200])
         return {}
 
     if not data:
@@ -161,6 +174,17 @@ async def _fetch_eodhd(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
     return result
 
 
+@retry(wait=wait_exponential(multiplier=1, min=1, max=8), stop=stop_after_attempt(3), reraise=True)
+async def _fmp_request_with_retry(url: str) -> Any:
+    """Make FMP request with exponential backoff on 429 errors."""
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        r = await http.get(url)
+        if r.status_code == 429:
+            logger.warning("fmp_rate_limit_429_retrying")
+            raise Exception("Rate limit 429 — will retry")
+        r.raise_for_status()
+        return r.json() or []
+
 async def _fetch_fmp(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
     base = f"https://financialmodelingprep.com/api/v3"
     key = settings.fmp_api_key
@@ -172,11 +196,10 @@ async def _fetch_fmp(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
 
     async def get(path: str):
         try:
-            r = await http.get(f"{base}{path}&apikey={key}")
-            r.raise_for_status()
-            return r.json() or []
+            url = f"{base}{path}&apikey={key}"
+            return await _fmp_request_with_retry(url)
         except Exception as exc:
-            logger.debug("fmp_request_failed", path=path, error=str(exc))
+            logger.debug("fmp_request_failed", path=path, error=str(exc)[:200])
             return []
 
     income, balance, cashflow = await asyncio.gather(
@@ -210,14 +233,11 @@ async def _fetch_insiders(ticker: str, http: httpx.AsyncClient) -> list[dict]:
         key = settings.fmp_api_key
         if key == "demo":
             return []
-        r = await http.get(
-            f"https://financialmodelingprep.com/api/v4/insider-trading"
-            f"?symbol={ticker}&limit=20&apikey={key}"
-        )
-        r.raise_for_status()
-        return r.json() or []
+        url = (f"https://financialmodelingprep.com/api/v4/insider-trading"
+               f"?symbol={ticker}&limit=20&apikey={key}")
+        return await _fmp_request_with_retry(url)
     except Exception as exc:
-        logger.debug("insider_trades_fetch_failed", ticker=ticker, error=str(exc))
+        logger.debug("insider_trades_fetch_failed", ticker=ticker, error=str(exc)[:200])
         return []
 
 

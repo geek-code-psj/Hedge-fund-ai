@@ -24,7 +24,9 @@ from tenacity import (
     retry,
     retry_if_exception_type,
     stop_after_attempt,
+    stop_after_delay,
     wait_exponential,
+    wait_random_sleep,
 )
 
 from app.core.config import get_settings
@@ -88,8 +90,8 @@ Respond with JSON: {{"score": float, "issues": [str, ...]}}
 
 @retry(
     retry=retry_if_exception_type((pydantic.ValidationError, ValueError)),
-    wait=wait_exponential(multiplier=1, min=2, max=20),
-    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=1, min=2, max=60),  # Increased max wait to 60s for rate limits
+    stop=stop_after_attempt(5),  # Increased attempts to 5
     before_sleep=before_sleep_log(logger, "warning"),
     reraise=True,
 )
@@ -145,9 +147,14 @@ async def run_reviewer(
         except Exception as gemini_error:
             # Check if it's a 429 rate limit error
             error_str = str(gemini_error)
-            if "429" in error_str or "quota" in error_str.lower() or "exceeded" in error_str.lower():
+            is_rate_limit = "429" in error_str or "quota" in error_str.lower() or "exceeded" in error_str.lower()
+            
+            if is_rate_limit:
                 logger.warning("gemini_quota_exhausted_fallback_to_openai", error=error_str[:200])
                 span.set_attribute("gemini_error", "quota_exhausted")
+                
+                # Wait before trying OpenAI to avoid hammering the fallback API
+                await asyncio.sleep(2)
                 
                 # Fallback to OpenAI
                 openai_client = _get_openai_client()
@@ -165,8 +172,19 @@ async def run_reviewer(
                         span.set_attribute("llm_model", "gpt-4o-mini")
                         logger.info("openai_fallback_success", ticker=research.ticker)
                     except Exception as openai_error:
-                        logger.error("openai_fallback_failed", error=str(openai_error)[:200])
-                        raise ValueError(f"Both Gemini (quota) and OpenAI failed: {openai_error}")
+                        openai_error_str = str(openai_error)
+                        logger.error("openai_fallback_failed", error=openai_error_str[:200])
+                        
+                        # Check if OpenAI also rate limited
+                        if "429" in openai_error_str or "quota" in openai_error_str.lower():
+                            logger.critical("both_gemini_and_openai_rate_limited")
+                            raise ValueError(
+                                f"BOTH Gemini AND OpenAI rate-limited (429). "
+                                f"Gemini: {error_str[:100]}. "
+                                f"OpenAI: {openai_error_str[:100]}. "
+                                f"Please wait before retrying."
+                            )
+                        raise ValueError(f"Both Gemini and OpenAI failed: OpenAI error: {openai_error}")
                 else:
                     raise ValueError(f"Gemini quota exhausted and OpenAI not configured: {gemini_error}")
             else:
