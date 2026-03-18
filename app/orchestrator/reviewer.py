@@ -1,12 +1,12 @@
 """
-app/orchestrator/reviewer.py  v3 — Gemini edition
+app/orchestrator/reviewer.py  v4 — Gemini (primary) + OpenAI Fallback
 Generator-Critic validation pattern:
   1. Generator: LLM produces InvestmentThesis (Instructor enforces schema)
   2. Critic:    A second LLM call scores the thesis for internal consistency
   3. If critic score < 0.6, Tenacity triggers retry with critic feedback
   4. Corrections from memory/experience bank are injected into system prompt
 
-Uses free Gemini 2.0 Flash via google-generativeai SDK.
+Uses Gemini 2.0 Flash (primary). Falls back to GPT-4o-mini on 429 rate limit.
 Arize Phoenix traces every call. temperature=0.1 for determinism.
 """
 from __future__ import annotations
@@ -18,6 +18,7 @@ from datetime import date
 
 import google.generativeai as genai
 import instructor
+from openai import OpenAI, RateLimitError
 from tenacity import (
     before_sleep_log,
     retry,
@@ -36,6 +37,7 @@ logger = get_logger(__name__)
 settings = get_settings()
 tracer = get_tracer("reviewer")
 
+# ── Initialize both Gemini and OpenAI clients ────────────────────────────────
 genai.configure(api_key=settings.gemini_api_key)
 _gemini_model = genai.GenerativeModel(
     model_name=settings.gemini_model,
@@ -45,6 +47,17 @@ _client = instructor.from_gemini(
     client=_gemini_model,
     mode=instructor.Mode.GEMINI_JSON,
 )
+
+# ── OpenAI fallback (for when Gemini quota exhausted) ──────────────────────
+_openai_client = None
+def _get_openai_client():
+    global _openai_client
+    if _openai_client is None and settings.openai_api_key != "sk-placeholder":
+        _openai_client = instructor.from_openai(
+            OpenAI(api_key=settings.openai_api_key),
+            mode=instructor.Mode.JSON,
+        )
+    return _openai_client
 
 _GENERATOR_SYSTEM = """\
 You are the lead equity analyst at a top-tier hedge fund.
@@ -104,7 +117,7 @@ async def run_reviewer(
         span.set_attribute("agents_completed", str(research.agents_completed))
         span.set_attribute("using_compressed", bool(compressed_context))
 
-        # ── Step 1: Generator (Gemini) ────────────────────────────────────────
+        # ── Step 1: Generator (Gemini primary, OpenAI fallback) ──────────────
         system_prompt = _GENERATOR_SYSTEM.format(
             today=today, corrections=corrections_block
         )
@@ -116,18 +129,58 @@ async def run_reviewer(
         # Gemini: merge system + user prompts into one user message
         combined_prompt = f"{system_prompt}\n\n{user_prompt}"
 
-        thesis: InvestmentThesis = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: _client.chat.completions.create(
-                response_model=InvestmentThesis,
-                messages=[{"role": "user", "content": combined_prompt}],
-            ),
-        )
+        thesis: InvestmentThesis = None
+        llm_used = "gemini"
+        
+        try:
+            # Try Gemini first
+            thesis = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _client.chat.completions.create(
+                    response_model=InvestmentThesis,
+                    messages=[{"role": "user", "content": combined_prompt}],
+                ),
+            )
+            span.set_attribute("llm_model", "gemini-2.0-flash")
+        except Exception as gemini_error:
+            # Check if it's a 429 rate limit error
+            error_str = str(gemini_error)
+            if "429" in error_str or "quota" in error_str.lower() or "exceeded" in error_str.lower():
+                logger.warning("gemini_quota_exhausted_fallback_to_openai", error=error_str[:200])
+                span.set_attribute("gemini_error", "quota_exhausted")
+                
+                # Fallback to OpenAI
+                openai_client = _get_openai_client()
+                if openai_client:
+                    try:
+                        thesis = await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: openai_client.chat.completions.create(
+                                response_model=InvestmentThesis,
+                                messages=[{"role": "system", "content": system_prompt},
+                                         {"role": "user", "content": user_prompt}],
+                            ),
+                        )
+                        llm_used = "openai"
+                        span.set_attribute("llm_model", "gpt-4o-mini")
+                        logger.info("openai_fallback_success", ticker=research.ticker)
+                    except Exception as openai_error:
+                        logger.error("openai_fallback_failed", error=str(openai_error)[:200])
+                        raise ValueError(f"Both Gemini (quota) and OpenAI failed: {openai_error}")
+                else:
+                    raise ValueError(f"Gemini quota exhausted and OpenAI not configured: {gemini_error}")
+            else:
+                logger.error("gemini_non_quota_error", error=error_str[:200])
+                raise
+        
+        if not thesis:
+            raise ValueError("Failed to generate thesis from both Gemini and OpenAI")
+            
         span.set_attribute("recommendation", thesis.recommendation.value)
         span.set_attribute("conviction", thesis.conviction_score)
 
     # ── Step 2: Critic pass ───────────────────────────────────────────────────
-    critic_score = await _critic_score(thesis)
+    critic_score = await _critic_score(thesis, llm_used)
     if critic_score < 0.6:
         logger.warning(
             "critic_rejected_thesis",
@@ -148,33 +201,53 @@ async def run_reviewer(
     return thesis
 
 
-async def _critic_score(thesis: InvestmentThesis) -> float:
+async def _critic_score(thesis: InvestmentThesis, llm_used: str = "gemini") -> float:
     """
-    Quick critic call — uses Gemini to score thesis consistency.
+    Quick critic call — uses the same LLM as generator for consistency.
+    Tries Gemini first, then OpenAI on quota error.
     Falls back to 1.0 (pass) if critic itself errors, to avoid blocking valid theses.
     """
     try:
-        critic_model = genai.GenerativeModel(settings.gemini_model)
         prompt = _CRITIC_PROMPT.format(
             thesis_json=thesis.model_dump_json(indent=2)[:3000]
         )
-        resp = await critic_model.generate_content_async(
-            prompt,
-            generation_config={
-                "temperature": 0,
-                "max_output_tokens": 300,
-                "response_mime_type": "application/json",
-            },
-        )
-        content = resp.text or "{}"
-        data = json.loads(content)
+        
+        if llm_used == "openai":
+            # Use OpenAI
+            openai_client = _get_openai_client()
+            if not openai_client:
+                logger.warning("critic_openai_client_unavailable")
+                return 1.0
+            
+            resp = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: openai_client.chat.completions.create(
+                    response_model=dict,
+                    messages=[{"role": "user", "content": prompt}],
+                ),
+            )
+            content = json.dumps(resp) if hasattr(resp, '__dict__') else str(resp)
+        else:
+            # Use Gemini
+            critic_model = genai.GenerativeModel(settings.gemini_model)
+            resp = await critic_model.generate_content_async(
+                prompt,
+                generation_config={
+                    "temperature": 0,
+                    "max_output_tokens": 300,
+                    "response_mime_type": "application/json",
+                },
+            )
+            content = resp.text or "{}"
+        
+        data = json.loads(content) if isinstance(content, str) else content
         score = float(data.get("score", 1.0))
         issues = data.get("issues", [])
         if issues:
             logger.info("critic_issues", issues=issues)
         return max(0.0, min(1.0, score))
     except Exception as exc:
-        logger.warning("critic_failed_fallback", error=str(exc))
+        logger.warning("critic_failed_fallback", error=str(exc)[:200], llm_used=llm_used)
         return 1.0  # don't block on critic failure
 
 
