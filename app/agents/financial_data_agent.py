@@ -102,17 +102,25 @@ async def _fetch_eodhd(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
     from datetime import date, timedelta
     symbol = ticker if "." in ticker else f"{ticker}.US"
     from_date = (date.today() - timedelta(days=365)).isoformat()
-    r = await http.get(
-        f"https://eodhd.com/api/eod/{symbol}"
-        f"?api_token={settings.eodhd_api_key}&fmt=json&from={from_date}"
-    )
-    r.raise_for_status()
-    data = r.json() or []
+    
+    try:
+        r = await http.get(
+            f"https://eodhd.com/api/eod/{symbol}"
+            f"?api_token={settings.eodhd_api_key}&fmt=json&from={from_date}"
+        )
+        r.raise_for_status()
+        data = r.json() or []
+    except Exception as exc:
+        logger.warning("eodhd_eod_fetch_failed", ticker=ticker, error=str(exc))
+        return {}
+
     if not data:
+        logger.warning("eodhd_no_data", ticker=ticker, api_key_is_demo=(settings.eodhd_api_key == "demo"))
         return {}
 
     latest = data[-1]
     closes = [float(d["close"]) for d in data if d.get("close")]
+    
     fund: dict = {}
     try:
         fr = await http.get(
@@ -130,10 +138,10 @@ async def _fetch_eodhd(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
                 "sector": raw.get("General", {}).get("Sector"),
                 "industry": raw.get("General", {}).get("Industry"),
             }
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("eodhd_fundamentals_failed", ticker=ticker, error=str(exc))
 
-    return {
+    result = {
         "close": latest.get("close"),
         "high_52w": max(closes) if closes else None,
         "low_52w": min(closes) if closes else None,
@@ -144,16 +152,32 @@ async def _fetch_eodhd(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
         ],
         **fund,
     }
+    
+    # Log if sector is missing (often happens with demo API keys)
+    if not result.get("sector") and settings.eodhd_api_key == "demo":
+        logger.debug("eodhd_demo_key_warning", ticker=ticker, 
+                    message="Using demo EODHD key — sector/price data unavailable. Add EODHD_API_KEY to .env")
+    
+    return result
 
 
 async def _fetch_fmp(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
     base = f"https://financialmodelingprep.com/api/v3"
     key = settings.fmp_api_key
+    
+    if key == "demo":
+        logger.debug("fmp_demo_key_warning", ticker=ticker,
+                    message="Using demo FMP key — fundamentals/insider data unavailable. Add FMP_API_KEY to .env")
+        return {}
 
     async def get(path: str):
-        r = await http.get(f"{base}{path}&apikey={key}")
-        r.raise_for_status()
-        return r.json() or []
+        try:
+            r = await http.get(f"{base}{path}&apikey={key}")
+            r.raise_for_status()
+            return r.json() or []
+        except Exception as exc:
+            logger.debug("fmp_request_failed", path=path, error=str(exc))
+            return []
 
     income, balance, cashflow = await asyncio.gather(
         get(f"/income-statement/{ticker}?period=quarter&limit=4"),
@@ -183,13 +207,17 @@ async def _fetch_fmp(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
 
 async def _fetch_insiders(ticker: str, http: httpx.AsyncClient) -> list[dict]:
     try:
+        key = settings.fmp_api_key
+        if key == "demo":
+            return []
         r = await http.get(
             f"https://financialmodelingprep.com/api/v4/insider-trading"
-            f"?symbol={ticker}&limit=20&apikey={settings.fmp_api_key}"
+            f"?symbol={ticker}&limit=20&apikey={key}"
         )
         r.raise_for_status()
         return r.json() or []
-    except Exception:
+    except Exception as exc:
+        logger.debug("insider_trades_fetch_failed", ticker=ticker, error=str(exc))
         return []
 
 
