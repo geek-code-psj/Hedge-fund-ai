@@ -14,8 +14,10 @@ from __future__ import annotations
 import asyncio
 import json
 import pydantic
+import warnings
 from datetime import date
 
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
 import google.generativeai as genai
 import instructor
 from openai import OpenAI, RateLimitError
