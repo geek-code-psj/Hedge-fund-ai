@@ -248,3 +248,62 @@ async def readiness():
 
     healthy = all(v == "ok" for v in checks.values())
     return {"ready": healthy, "checks": checks}
+
+
+# ── Debug: Financial API Testing ──────────────────────────────────────────────
+
+@router.get("/debug/financial-api/{ticker}", include_in_schema=False)
+async def debug_financial_api(ticker: str):
+    """
+    DEBUG ENDPOINT: Test financial APIs directly.
+    Shows what EODHD and FMP are returning for a given ticker.
+    Used to diagnose "Price=N/A" issues.
+    """
+    import httpx
+    
+    results = {
+        "ticker": ticker.upper(),
+        "eodhd": {"key_set": settings.eodhd_api_key != "demo", "is_demo": settings.eodhd_api_key == "demo"},
+        "fmp": {"key_set": settings.fmp_api_key != "demo", "is_demo": settings.fmp_api_key == "demo"},
+    }
+    
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        # Test EODHD
+        symbol = ticker if "." in ticker else f"{ticker}.US"
+        try:
+            r = await http.get(
+                f"https://eodhd.com/api/eod/{symbol}"
+                f"?api_token={settings.eodhd_api_key}&fmt=json&from=2024-01-01&to=2025-01-01&limit=1"
+            )
+            r.raise_for_status()
+            data = r.json()
+            results["eodhd"]["status"] = "ok" if data else "empty"
+            if data and isinstance(data, list) and len(data) > 0:
+                results["eodhd"]["sample"] = {
+                    "close": data[0].get("close"),
+                    "high": data[0].get("high"),
+                    "low": data[0].get("low"),
+                    "date": data[0].get("date"),
+                }
+            else:
+                results["eodhd"]["response"] = data
+        except Exception as exc:
+            results["eodhd"]["error"] = str(exc)
+        
+        # Test FMP income statement (quick test)
+        try:
+            r = await http.get(
+                f"https://financialmodelingprep.com/api/v3/income-statement/{ticker}"
+                f"?period=quarter&limit=1&apikey={settings.fmp_api_key}"
+            )
+            r.raise_for_status()
+            data = r.json()
+            results["fmp"]["status"] = "ok" if data else "empty"
+            if data and isinstance(data, list) and len(data) > 0:
+                results["fmp"]["sample"] = {"revenue": data[0].get("revenue"), "date": data[0].get("date")}
+            else:
+                results["fmp"]["response"] = data
+        except Exception as exc:
+            results["fmp"]["error"] = str(exc)
+    
+    return results
