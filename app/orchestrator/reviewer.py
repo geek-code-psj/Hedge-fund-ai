@@ -349,8 +349,12 @@ async def run_reviewer(
                     thesis = _create_fallback_thesis(research)
                     span.set_attribute("llm_model", "fallback")
             else:
-                logger.error("gemini_non_quota_error", error=error_str[:200])
-                raise
+                # Non-rate-limit Gemini error (e.g., schema validation, parsing)
+                # Instead of raising and triggering retry loop, use fallback thesis immediately
+                logger.warning("gemini_error_creating_fallback", error=error_str[:200])
+                thesis = _create_fallback_thesis(research)
+                span.set_attribute("llm_model", "fallback")
+                llm_used = "fallback"
         
         if not thesis:
             logger.error("thesis_still_none_creating_fallback")
