@@ -2,9 +2,16 @@
 
 import { useState } from 'react';
 
+interface DiagnosticsData {
+  timestamp?: string;
+  ticker: string;
+  verdict: string;
+  [key: string]: any;
+}
+
 export default function DiagnosticsPage() {
   const [ticker, setTicker] = useState('AAPL');
-  const [diagnostics, setDiagnostics] = useState(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
