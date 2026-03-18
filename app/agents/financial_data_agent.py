@@ -189,8 +189,6 @@ async def _fetch_eodhd(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
                        has_general=bool(raw.get("General")))
         else:
             logger.warning("eodhd_fundamentals_http_error", ticker=ticker, status=fr.status_code)
-        else:
-            logger.warning("eodhd_fundamentals_http_error", ticker=ticker, status=fr.status_code)
     except Exception as exc:
         logger.debug("eodhd_fundamentals_failed", ticker=ticker, error=str(exc)[:200])
 
