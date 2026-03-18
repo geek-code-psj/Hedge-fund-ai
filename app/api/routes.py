@@ -322,6 +322,12 @@ async def debug_financial_api(ticker: str):
                         results["fmp"]["alternate_test_status"] = r2.status_code
                 except:
                     results["fmp"]["alternate_test"] = "failed"
+                
+                # Add guidance about FMP legacy API deprecation
+                if "Legacy Endpoint" in str(exc.response.text):
+                    results["fmp"]["legacy_api_warning"] = "FMP deprecated legacy endpoints (v3 income-statement, balance-sheet, etc.)"
+                    results["fmp"]["solution_a"] = "Upgrade to FMP's new API endpoints (check https://site.financialmodelingprep.com/developer/docs)"
+                    results["fmp"]["solution_b"] = "Set FMP_API_KEY=disabled in Railway Variables to use EODHD-only analysis"
             
             try:
                 results["fmp"]["response_body"] = exc.response.json()

@@ -226,9 +226,9 @@ async def _fetch_fmp(ticker: str, http: httpx.AsyncClient) -> dict[str, Any]:
     base = f"https://financialmodelingprep.com/api/v3"
     key = settings.fmp_api_key
     
-    if key == "demo":
-        logger.debug("fmp_demo_key_warning", ticker=ticker,
-                    message="Using demo FMP key — fundamentals/insider data unavailable. Add FMP_API_KEY to .env")
+    if key == "demo" or key.lower() == "disabled":
+        logger.debug("fmp_skipped", ticker=ticker, reason="demo or disabled",
+                    message="FMP skipped — using EODHD-only analysis. Set FMP_API_KEY=your_real_key to enable.")
         return {}
     
     key_status = "REAL" if key != "demo" else "DEMO"
