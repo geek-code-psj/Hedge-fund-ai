@@ -17,11 +17,8 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # LLM — Gemini (primary, supports 3 keys for rotation on rate limits)
-    gemini_api_key: str = "AIza-placeholder"  # Primary/fallback
-    gemini_api_key_1: str = "AIza-placeholder"
-    gemini_api_key_2: str = "AIza-placeholder"
-    gemini_api_key_3: str = "AIza-placeholder"
+    # LLM — Gemini (primary, free)
+    gemini_api_key: str = "AIza-placeholder"
     gemini_model: str = "gemini-2.0-flash"
 
     # LLM — OpenAI (optional fallback)
@@ -69,32 +66,7 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.app_env == "production"
 
-    def get_gemini_api_keys(self) -> list[str]:
-        """Return list of valid Gemini API keys for rotation."""
-        keys = [
-            self.gemini_api_key_1,
-            self.gemini_api_key_2,
-            self.gemini_api_key_3,
-        ]
-        # Filter out placeholder keys; fallback to primary key
-        valid_keys = [k for k in keys if k and not k.startswith("AIza-placeholder")]
-        return valid_keys if valid_keys else [self.gemini_api_key]
-
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-
-
-# Global state for API key rotation (in-memory counter)
-_gemini_key_index: int = 0
-
-
-def get_next_gemini_api_key() -> str:
-    """Rotate through available Gemini API keys."""
-    global _gemini_key_index
-    settings = get_settings()
-    keys = settings.get_gemini_api_keys()
-    key = keys[_gemini_key_index % len(keys)]
-    _gemini_key_index = (_gemini_key_index + 1) % len(keys)
-    return key
